@@ -1,13 +1,17 @@
-defmodule Cldr.Print.MixProject do
+defmodule Cldr.Calendar.HTML.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.1.0"
 
   def project do
     [
-      app: :ex_cldr_print,
+      app: :ex_cldr_calendars_html,
       version: @version,
       elixir: "~> 1.5",
+      deps: deps(),
+      elixirc_paths: elixirc_paths(Mix.env()),
+      name: "Cldr Calendars HTML",
+      source_url: "https://github.com/kipcole9/cldr_calendars_html",
       docs: docs(),
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
@@ -19,15 +23,15 @@ defmodule Cldr.Print.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       dialyzer: [
         ignore_warnings: ".dialyzer_ignore_warnings",
-        plt_add_apps: ~w(gettext inets jason mix plug)a
+        plt_add_apps: ~w(inets jason mix)a
       ],
       compilers: Mix.compilers()
     ]
   end
 
-  def description do
+  defp description do
     """
-    Printf/sprintf functions and macros for Elixir
+    Calendars HTML formatting for localised and generalised calendars.
     """
   end
 
@@ -35,10 +39,6 @@ defmodule Cldr.Print.MixProject do
     [
       extra_applications: [:logger]
     ]
-  end
-
-  def aliases do
-    []
   end
 
   defp package do
@@ -53,25 +53,28 @@ defmodule Cldr.Print.MixProject do
         "README*",
         "CHANGELOG*",
         "LICENSE*",
+        "priv"
       ]
     ]
   end
 
   defp deps do
     [
-      {:nimble_parsec, "~> 0.5"},
       {:ex_cldr_numbers, "~> 2.6"},
+      {:ex_cldr_calendars, path: "../cldr_calendars"},
+      {:nimble_csv, "~> 0.5", only: [:dev, :test, :release]},
       {:jason, "~> 1.0"},
-      {:ex_doc, "~> 0.19"},
-      {:benchee, "~> 0.14", only: [:dev, :test]}
+      {:ex_doc, "~> 0.18", only: [:release, :dev]},
+      {:dialyxir, "~> 1.0.0-rc.4", only: [:dev], runtime: false}
     ]
   end
 
   def links do
     %{
-      "GitHub" => "https://github.com/kipcole9/ex_cldr_print",
-      "Readme" => "https://github.com/kipcole9/ex_cldr_print/blob/v#{@version}/README.md",
-      "Changelog" => "https://github.com/kipcole9/ex_cldr_print/blob/v#{@version}/CHANGELOG.md"
+      "GitHub" => "https://github.com/kipcole9/cldr_calendars_html",
+      "Readme" => "https://github.com/kipcole9/cldr_calendars_html/blob/v#{@version}/README.md",
+      "Changelog" =>
+        "https://github.com/kipcole9/cldr_calendars_html/blob/v#{@version}/CHANGELOG.md"
     }
   end
 
@@ -85,11 +88,12 @@ defmodule Cldr.Print.MixProject do
         "LICENSE.md",
         "CHANGELOG.md"
       ],
-      groups_for_modules: [
-        "Default CLDR Backend": ~r/Cldr.Print.Backend/
-      ],
       skip_undefined_reference_warnings_on: ["changelog"]
     ]
+  end
+
+  def aliases do
+    []
   end
 
   defp elixirc_paths(:test), do: ["lib", "mix", "src", "test"]

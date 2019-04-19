@@ -24,7 +24,11 @@ defmodule Cldr.Print.Parser.Core do
   end
 
   def group do
-    utf8_string([?,], min: 1)
+    utf8_string([?'], min: 1)
+  end
+
+  def native_number_system do
+    utf8_string([?I], min: 1)
   end
 
   def digit do
@@ -44,7 +48,7 @@ defmodule Cldr.Print.Parser.Core do
   end
 
   def format_type do
-    ascii_string([?d, ?o, ?f, ?x, ?X, ?s, ?e, ?E, ?g, ?G], 1)
+    ascii_string([?d, ?o, ?f, ?x, ?X, ?s, ?e, ?E, ?g, ?G, ?u, ?i], 1)
   end
 
   def literal do
@@ -58,6 +62,7 @@ defmodule Cldr.Print.Parser.Core do
         with_plus() |> replace(true) |> unwrap_and_tag(:with_plus),
         zero_fill() |> replace(true) |> unwrap_and_tag(:zero_fill),
         group()|> replace(true) |> unwrap_and_tag(:group),
+        native_number_system()|> replace(true) |> unwrap_and_tag(:native_number_system),
         leading_zero_x()|> replace(true) |> unwrap_and_tag(:leading_zero_x)
       ])
     )
