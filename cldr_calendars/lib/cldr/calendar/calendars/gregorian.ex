@@ -16,7 +16,7 @@ defmodule Cldr.Calendar.Gregorian do
   """
 
   use Cldr.Calendar.Base.Month,
-    month: 1,
-    min_days: 4,
-    day: 1
+    month_of_year: 1,
+    min_days_in_first_week: 4,
+    day_of_week: Cldr.Calendar.monday()
 end

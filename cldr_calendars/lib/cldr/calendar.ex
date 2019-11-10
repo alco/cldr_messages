@@ -4,7 +4,7 @@ defmodule Cldr.Calendar do
   Elixir's `Calendar` behaviour.
 
   `Cldr.Calendar` supports the creation of calendars
-  that are variations on the proleptic Gregorian
+  that are variations on the proleptic Cldr.Calendar.Gregorian
   calendar. It also adds additional functions, defined
   by the `Cldr.Calendar` behaviour, to support these
   derived calendars.
@@ -16,13 +16,13 @@ defmodule Cldr.Calendar do
   There are two general types of calendars supported:
 
   * `month` calendars that mirror the monthly structure
-    of the proleptic Gregorian calendar but which are
+    of the proleptic Cldr.Calendar.Gregorian calendar but which are
     deemed to start the year in a month other than January.
 
   * `week` calendars that are defined to have a 52 week
     structure (53 weeks in a long year). These calendars
     can be configured to start or end on the first, last or
-    nearest day to the beginning or end of a Gregorian
+    nearest day to the beginning or end of a Cldr.Calendar.Gregorian
     month.  The main intent behind this structure is to
     have each year start and end on the same day of the
     week with a consistent 13-week quarterly structure than
@@ -32,6 +32,8 @@ defmodule Cldr.Calendar do
   """
 
   alias Cldr.Calendar.Config
+  alias Cldr.Calendar.Interval
+  import Kernel, except: [inspect: 1, inspect: 2]
 
   @typedoc """
   Specifies the type of a calendar.
@@ -88,11 +90,29 @@ defmodule Cldr.Calendar do
   """
   @type precision :: :years | :quarters | :months | :weeks | :days
 
+  @typedoc """
+  The types of relationship between two Date.Range intervals
+  """
+  @type interval_relation ::
+          :precedes
+          | :preceded_by
+          | :meets
+          | :met_by
+          | :overlaps
+          | :overlapped_by
+          | :finished_by
+          | :finishes
+          | :contains
+          | :during
+          | :starts
+          | :started_by
+          | :equals
+
   @doc """
   Returns the `month` for a given `year`, `month` or `week`, and `day`
   for a a calendar.
 
-  The `month_in_year` is calculated based upon the calendar configuration.
+  The `month_of_year` is calculated based upon the calendar configuration.
 
   """
   @callback month_of_year(
@@ -131,6 +151,16 @@ defmodule Cldr.Calendar do
               {Calendar.year(), Calendar.week()} | {:error, :not_defined}
 
   @doc """
+  Returns a tuple of `{month, week_in_month}` for a given `year`, `month` or `week`, and `day`
+  for a a calendar.
+
+  The `week_in_month` is calculated based upon the calendar configuration.
+
+  """
+  @callback week_of_month(Calendar.year(), Cldr.Calendar.week(), Calendar.day()) ::
+              {Calendar.month(), Cldr.Calendar.week()} | {:error, :not_defined}
+
+  @doc """
   Returns the CLDR calendar type.
 
   Only algorithmic calendars are considered
@@ -144,6 +174,20 @@ defmodule Cldr.Calendar do
   Returns either :week or :month
   """
   @callback calendar_base() :: :week | :month
+
+  @doc """
+  Returns the number of periods (which are
+  months in a month calendar and weeks in a
+  week calendar) in a year
+
+  """
+  @callback periods_in_year(year :: Calendar.year()) :: week() | Calendar.month()
+
+  @doc """
+  Returns the number of weeks in a year
+
+  """
+  @callback weeks_in_year(year :: Calendar.year()) :: week() | {:error, :not_defined}
 
   @doc """
   Returns the number of days in a year
@@ -177,7 +221,7 @@ defmodule Cldr.Calendar do
   given week for a calendar year.
 
   """
-  @callback week(year :: Calendar.year(), week :: Cldr.Calendar.week()) ::
+  @callback week(year :: Calendar.year(), week :: week()) ::
               Date.Range.t() | {:error, :not_defined}
 
   @doc """
@@ -191,7 +235,7 @@ defmodule Cldr.Calendar do
   """
   @callback plus(
               year :: Calendar.year(),
-              month :: Calendar.month() | Cldr.Calendar.week(),
+              month :: Calendar.month() | week(),
               day :: Calendar.day(),
               months_or_quarters :: :months | :quarters,
               increment :: integer,
@@ -202,6 +246,7 @@ defmodule Cldr.Calendar do
   @days_in_a_week Enum.count(@days)
   @the_world :"001"
   @valid_precision [:years, :quarters, :months, :weeks, :days]
+  @default_calendar Cldr.Calendar.Gregorian
 
   alias Cldr.LanguageTag
   alias Cldr.Calendar.Config
@@ -209,6 +254,19 @@ defmodule Cldr.Calendar do
   @doc false
   def cldr_backend_provider(config) do
     Cldr.Calendar.Backend.Compiler.define_calendar_modules(config)
+  end
+
+  @doc """
+  Returns the default calendar.
+
+  """
+  def default_calendar do
+    @default_calendar
+  end
+
+  @doc false
+  def default_cldr_calendar do
+    default_calendar().cldr_calendar_type()
   end
 
   @doc """
@@ -233,12 +291,116 @@ defmodule Cldr.Calendar do
 
   * `{:ok, module}` where `module` is the new calendar
     module that conforms to the `Calendar` and `Cldr.Calendar`
-    behaviours
+    behaviours or
 
-  ## Configuration
+  * `{already_exists, module}` if a module of the given
+    calendar name already exists. It is not guaranteed
+    that the module is in fact a calendar module in this case.
+
+  ## Configuration options
+
+  The following options can be provided to create
+  a new calendar.
+
+  * `:locale`  can be any configured locale. If
+    provided it will be used to determine the
+    `:day_of_year` and `:days_in_first_week`
+    option values. The default value is `nil`
+
+  * `:cldr_backend` defines a default
+    backend module to be used for this calendar.
+    The default is `nil`.
+
+  * `:weeks_in_month` defines the layout of
+    weeks in a quarter for a week- or month-
+    based calendar. The value must be one of
+    `[4, 4, 5]`, `[4,5,4]` or `[5,4,4]`.
+    The default is `[4,4,5]`. This option
+    is ignored for `:month` based calendars
+    that have the parameter `day_of_year: :first`.
+
+  * `:begins_or_ends` determines whether the calendar
+    year begins or ends on the given `:day_of_week` and
+    `:month_of_year`. The default is `:begins`.
+
+  * `:first_or_last` determines whether the calendar
+    year starts (or ends) on the first, last or nearest
+    `:day-of_week` and `:month_of_year`. The default
+    is `:first`
+
+  * `:day_of_week` determines the day
+    of the week on which this calendar begins
+    or ends. It may be a number in the range
+    `1..7` representing Monday to Sunday.
+    It may also be `:first` indicating the
+    the weeks are calculated from the first
+    day of the calendar day irrespective of
+    the day of the week. In this case the last
+    week of the year may be less than 7 days
+    in length. The default is `1`.
+
+  * `:month_of_year` determines the Cldr.Calendar.Gregorian
+    month of year in which this calendar begins
+    or ends. The default is `1`.
+
+  * `:year` is used to determine which calendar
+    Greogian year is applicable for a given
+    calendar date. The valid options are `:first`,
+    `:last` and `majority`.  The default is
+    `:majority`.
+
+  * `:min_days_in_first_week` is used to determine
+    how many days of the Cldr.Calendar.Gregorian year must be in
+    the first week of a calendar year. This is used
+    when determining when the year starts for week-based
+    years.  The default is `4` which is consistent with
+    the [ISO Week calendar](https://en.wikipedia.org/wiki/ISO_week_date)
+
+  ## Examples
+
+  Each calendar has a function `__config__/0` generated within
+  it and therefore the configuraiton of the included calendars
+  in `ex_cldr_calendars` provide insight into the behaviour
+  of the configuration parameters.
+
+  As an example here we define the [ISO Week calendar](https://en.wikipedia.org/wiki/ISO_week_date)
+  calendar in full:
+
+  ```
+  defmodule ISOWeek do
+    use Cldr.Calendar.Base.Week,
+      day_of_week: 1,              # Weeks begin or end on Monday
+      month_of_year: 1,            # Years begin or end in January
+      min_days_in_first_week, 4,   # 4 Cldr.Calendar.Gregorian days of the year must be in the first week
+      begins_or_ends: :begins,     # The year *begins* on the `day_of_week` and `month_of_year`
+      first_or_last: :first,       # They year *begins* on the *first* `day_of_week` and `month_of_year`
+      weeks_in_month: [4, 5, 4],   # The weeks are laid out as *months* in a `[4,5,4]` pattern
+      year: :majority,             # Any given year is that in which the majority of Cldr.Calendar.Gregorian months fall
+      cldr_backend: nil,           # No default `cldr_backend` is configured.
+      locale: nil                  # No `locale` is used to aid configuration
+  end
+  ```
+
+  This can be generated at runtime by:
+  ```
+      iex> Cldr.Calendar.new ISOWeek, :week,
+      ...>   day_of_week: 1,
+      ...>   month_of_year: 1,
+      ...>   min_days_in_first_week: 4,
+      ...>   begins_or_ends: :begins,
+      ...>   first_or_last: :first,
+      ...>   weeks_in_month: [4, 5, 4],
+      ...>   year: :majority,
+      ...>   cldr_backend: nil,
+      ...>   locale: nil
+      {:ok, ISOWeek}
+  ```
+  Note that `Cldr.Calendar.ISOWeek` is included as part of this
+  library.
 
   """
-  @spec new(atom(), calendar_type(), Keyword.t()) :: {:ok, calendar()} | no_return()
+  @spec new(module(), calendar_type(), Keyword.t()) ::
+          {:ok, calendar()} | {:already_exists, module()}
 
   def new(calendar_module, calendar_type, config)
       when is_atom(calendar_module) and calendar_type in [:week, :month] do
@@ -250,9 +412,9 @@ defmodule Cldr.Calendar do
   end
 
   defp create_calendar(calendar_module, calendar_type, config) do
-    structured_config = extract_options(config)
+    structured_config = Config.extract_options(config)
 
-    with {:ok, _} <- validate_config(structured_config, calendar_type) do
+    with {:ok, _} <- Config.validate_config(structured_config, calendar_type) do
       calendar_type =
         calendar_type
         |> to_string
@@ -469,6 +631,9 @@ defmodule Cldr.Calendar do
 
   * `year` is any integer year number
 
+  * `calendar` is any module that implements the `Calendar` and
+    `Cldr.Calendar` behaviours or `Calendar.ISO`
+
   ## Examples
 
       iex> Cldr.Calendar.first_gregorian_day_of_year 2019, Cldr.Calendar.Gregorian
@@ -477,12 +642,16 @@ defmodule Cldr.Calendar do
       iex> Cldr.Calendar.first_gregorian_day_of_year 2019, Cldr.Calendar.NRF
       %Date{calendar: Cldr.Calendar.Gregorian, day: 3, month: 2, year: 2019}
 
+      iex> Cldr.Calendar.first_gregorian_day_of_year ~D[2019-12-01]
+      ~D[2019-01-01]
+
   """
   @spec first_gregorian_day_of_year(Calendar.year(), calendar()) ::
-          {:ok, Date.t()} | {:error, :invalid_date}
+          Date.t() | {:error, :invalid_date}
 
   def first_gregorian_day_of_year(year, Calendar.ISO) do
-    first_gregorian_day_of_year(year, Cldr.Calendar.Gregorian)
+    day = first_gregorian_day_of_year(year, Cldr.Calendar.Gregorian)
+    %{day | calendar: Calendar.ISO}
   end
 
   def first_gregorian_day_of_year(year, calendar) do
@@ -496,6 +665,10 @@ defmodule Cldr.Calendar do
     end
   end
 
+  def first_gregorian_day_of_year(%{year: year, calendar: calendar}) do
+    first_gregorian_day_of_year(year, calendar)
+  end
+
   @doc """
   Returns the gregorian date of the first day of a `year`
   for a `calendar`.
@@ -503,6 +676,9 @@ defmodule Cldr.Calendar do
   ## Arguments
 
   * `year` is any integer year number
+
+  * `calendar` is any module that implements the `Calendar` and
+    `Cldr.Calendar` behaviours or `Calendar.ISO`
 
   ## Examples
 
@@ -512,12 +688,16 @@ defmodule Cldr.Calendar do
       iex> Cldr.Calendar.last_gregorian_day_of_year 2019, Cldr.Calendar.NRF
       %Date{calendar: Cldr.Calendar.Gregorian, day: 1, month: 2, year: 2020}
 
+      iex> Cldr.Calendar.last_gregorian_day_of_year ~D[2019-12-01]
+      ~D[2019-12-31]
+
   """
   @spec last_gregorian_day_of_year(Calendar.year(), calendar()) ::
-          {:ok, Date.t()} | {:error, :invalid_date}
+          Date.t() | {:error, :invalid_date}
 
   def last_gregorian_day_of_year(year, Calendar.ISO) do
-    last_gregorian_day_of_year(year, Cldr.Calendar.Gregorian)
+    day = last_gregorian_day_of_year(year, Cldr.Calendar.Gregorian)
+    %{day | calendar: Calendar.ISO}
   end
 
   def last_gregorian_day_of_year(year, calendar) do
@@ -645,60 +825,26 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
-      iex> import Cldr.Calendar.Sigils
-      iex> Cldr.Calendar.month_of_year ~d[2019-01-01]
+      iex> Cldr.Calendar.month_of_year ~D[2019-01-01]
       1
-      iex> Cldr.Calendar.month_of_year ~d[2019-12-01]
+      iex> Cldr.Calendar.month_of_year ~D[2019-12-01]
       12
-      iex> Cldr.Calendar.month_of_year ~d[2019-52-01]NRF
+      iex> Cldr.Calendar.month_of_year ~D[2019-52-01 Cldr.Calendar.NRF]
       12
-      iex> Cldr.Calendar.month_of_year ~d[2019-26-01]NRF
+      iex> Cldr.Calendar.month_of_year ~D[2019-26-01 Cldr.Calendar.NRF]
       6
 
   """
   @spec month_of_year(Date.t()) :: Calendar.month()
 
+  def month_of_year(%{calendar: Calendar.ISO} = date) do
+    %{date | calendar: Cldr.Calendar.Gregorian}
+    |> month_of_year
+  end
+
   def month_of_year(date) do
     %{year: year, month: month, day: day, calendar: calendar} = date
     calendar.month_of_year(year, month, day)
-  end
-
-  @doc """
-  Returns the `ISO week` number for
-  a `date`.
-
-  ## Arguments
-
-  * `date` is any `Date.t()`
-
-  ## Returns
-
-  * a the ISO week of the year as an
-    integer or
-
-  * `{:error, :not_defined}` is the calendar
-    does not support the concept of weeks.
-
-  ## Examples
-
-      iex> import Cldr.Calendar.Sigils
-      iex> Cldr.Calendar.iso_week_of_year ~d[2019-01-01]
-      {2019, 1}
-      iex> Cldr.Calendar.iso_week_of_year ~d[2019-02-01]
-      {2019, 5}
-      iex> Cldr.Calendar.iso_week_of_year ~d[2019-52-01]NRF
-      {2020, 4}
-      iex> Cldr.Calendar.iso_week_of_year ~d[2019-26-01]NRF
-      {2019, 30}
-      iex> Cldr.Calendar.iso_week_of_year ~d[2019-12-01]Julian
-      {:error, :not_defined}
-
-  """
-  @spec iso_week_of_year(Date.t()) :: {Calendar.year(), week()}
-
-  def iso_week_of_year(date) do
-    %{year: year, month: month, day: day, calendar: calendar} = date
-    calendar.iso_week_of_year(year, month, day)
   end
 
   @doc """
@@ -719,24 +865,118 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
-      iex> import Cldr.Calendar.Sigils
-      iex> Cldr.Calendar.week_of_year ~d[2019-01-01]
+      iex> Cldr.Calendar.week_of_year ~D[2019-01-01]
       {2019, 1}
-      iex> Cldr.Calendar.week_of_year ~d[2019-12-01]
+      iex> Cldr.Calendar.week_of_year ~D[2019-12-01]
       {2019, 48}
-      iex> Cldr.Calendar.week_of_year ~d[2019-52-01]NRF
+      iex> Cldr.Calendar.week_of_year ~D[2019-52-01 Cldr.Calendar.NRF]
       {2019, 52}
-      iex> Cldr.Calendar.week_of_year ~d[2019-26-01]NRF
+      iex> Cldr.Calendar.week_of_year ~D[2019-26-01 Cldr.Calendar.NRF]
       {2019, 26}
-      iex> Cldr.Calendar.week_of_year ~d[2019-12-01]Julian
+      iex> Cldr.Calendar.week_of_year ~D[2019-12-01 Cldr.Calendar.Julian]
       {:error, :not_defined}
 
   """
   @spec week_of_year(Date.t()) :: {Calendar.year(), week()}
 
+  def week_of_year(%{calendar: Calendar.ISO} = date) do
+    %{date | calendar: Cldr.Calendar.Gregorian}
+    |> week_of_year
+  end
+
   def week_of_year(date) do
     %{year: year, month: month, day: day, calendar: calendar} = date
     calendar.week_of_year(year, month, day)
+  end
+
+  @doc """
+  Returns the `ISO week` number for
+  a `date`.
+
+  ## Arguments
+
+  * `date` is any `Date.t()`
+
+  ## Returns
+
+  * a the ISO week of the year as an
+    integer or
+
+  * `{:error, :not_defined}` is the calendar
+    does not support the concept of weeks.
+
+  ## Examples
+
+      iex> Cldr.Calendar.iso_week_of_year ~D[2019-01-01]
+      {2019, 1}
+      iex> Cldr.Calendar.iso_week_of_year ~D[2019-02-01]
+      {2019, 5}
+      iex> Cldr.Calendar.iso_week_of_year ~D[2019-52-01 Cldr.Calendar.NRF]
+      {2020, 4}
+      iex> Cldr.Calendar.iso_week_of_year ~D[2019-26-01 Cldr.Calendar.NRF]
+      {2019, 30}
+      iex> Cldr.Calendar.iso_week_of_year ~D[2019-12-01 Cldr.Calendar.Julian]
+      {:error, :not_defined}
+
+  """
+  @spec iso_week_of_year(Date.t()) :: {Calendar.year(), week()}
+
+  def iso_week_of_year(%{calendar: Calendar.ISO} = date) do
+    %{date | calendar: Cldr.Calendar.Gregorian}
+    |> iso_week_of_year
+  end
+
+  def iso_week_of_year(date) do
+    %{year: year, month: month, day: day, calendar: calendar} = date
+    calendar.iso_week_of_year(year, month, day)
+  end
+
+  @doc """
+  Returns the `{month, week_number}`
+  for a `date`.
+
+  The nature of a week depends on the
+  calendar configuration and therefore
+  some results may be surprising.  For example
+  the date of December 31st 2018 is actually
+  in month one of the ISO Week calendar of
+  2019.
+
+  ## Arguments
+
+  * `date` is any `Date.t()`
+
+  ## Returns
+
+  * a tuple of the form `{month, week}` or
+
+  * `{:error, :not_defined}` if the calendar
+    does not support the concept of weeks.
+
+  ## Examples
+
+      iex> Cldr.Calendar.week_of_month(~D[2019-01-01])
+      {1, 1}
+      iex> Cldr.Calendar.week_of_month(~D[2018-12-31])
+      {1, 1}
+      iex> Cldr.Calendar.week_of_month(~D[2019-01-01 Cldr.Calendar.BasicWeek])
+      {1, 1}
+      iex> Cldr.Calendar.week_of_month(~D[2018-12-31 Cldr.Calendar.BasicWeek])
+      {12, 5}
+      iex> Cldr.Calendar.week_of_month(~D[2018-12-31 Cldr.Calendar.Julian])
+      {:error, :not_defined}
+
+  """
+  @spec week_of_month(Date.t()) :: {Calendar.month(), week()}
+
+  def week_of_month(%{calendar: Calendar.ISO} = date) do
+    %{date | calendar: Cldr.Calendar.Gregorian}
+    |> week_of_month
+  end
+
+  def week_of_month(date) do
+    %{year: year, month: month, day: day, calendar: calendar} = date
+    calendar.week_of_month(year, month, day)
   end
 
   @doc """
@@ -754,16 +994,15 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
-      iex> import Cldr.Calendar.Sigils
-      iex> Cldr.Calendar.day_of_year ~d[2019-01-01]
+      iex> Cldr.Calendar.day_of_year ~D[2019-01-01]
       1
-      iex> Cldr.Calendar.day_of_year ~d[2016-12-31]
+      iex> Cldr.Calendar.day_of_year ~D[2016-12-31]
       366
-      iex> Cldr.Calendar.day_of_year ~d[2019-12-31]
+      iex> Cldr.Calendar.day_of_year ~D[2019-12-31]
       365
-      iex> Cldr.Calendar.day_of_year ~d[2019-52-07]NRF
+      iex> Cldr.Calendar.day_of_year ~D[2019-52-07 Cldr.Calendar.NRF]
       365
-      iex> Cldr.Calendar.day_of_year ~d[2012-53-07]NRF
+      iex> Cldr.Calendar.day_of_year ~D[2012-53-07 Cldr.Calendar.NRF]
       372
 
   """
@@ -772,6 +1011,49 @@ defmodule Cldr.Calendar do
   def day_of_year(date) do
     %{year: year, month: month, day: day, calendar: calendar} = date
     calendar.day_of_year(year, month, day)
+  end
+
+  @doc """
+  Returns the number of weeks
+  in a year.
+
+  ## Arguments
+
+  * Either a `Date.t()` or
+    an integer year a calendar name
+
+  ## Returns
+
+  * In integer number of weeks in a year
+
+  ## Examples
+
+      iex> Cldr.Calendar.weeks_in_year ~D[2026-W01-1 Cldr.Calendar.ISOWeek]
+      53
+      iex> Cldr.Calendar.weeks_in_year ~D[2019-01-01]
+      52
+      iex> Cldr.Calendar.weeks_in_year ~D[2020-01-01]
+      53
+      iex> Cldr.Calendar.weeks_in_year 2020, Cldr.Calendar.ISOWeek
+      53
+
+  """
+  @spec weeks_in_year(Date.t()) :: Cldr.Calendar.week()
+  def weeks_in_year(%{year: year, calendar: Calendar.ISO}) do
+    weeks_in_year(year, Cldr.Calendar.Gregorian)
+  end
+
+  def weeks_in_year(%{year: year, calendar: calendar}) do
+    weeks_in_year(year, calendar)
+  end
+
+  @spec weeks_in_year(Calendar.year(), calendar) :: Cldr.Calendar.week()
+  def weeks_in_year(year, Calendar.ISO) do
+    Cldr.Calendar.Gregorian.weeks_in_year(year)
+  end
+
+  def weeks_in_year(year, calendar) do
+    calendar.weeks_in_year(year)
   end
 
   @doc """
@@ -937,235 +1219,211 @@ defmodule Cldr.Calendar do
     end
   end
 
-  @doc """
-  Returns a `Date.Range.t` that represents
-  the `year`.
-
-  The range is enumerable.
-
-  ## Arguments
-
-  * `year` is any `year` for `calendar`
-
-  * `calendar` is any module that implements
-    the `Calendar` and `Cldr.Calendar`
-    behaviours
-
-  ## Returns
-
-  * A `Date.Range.t()` representing the
-    the enumerable days in the `year`
-
-  ## Examples
-
-      iex> Cldr.Calendar.year 2019, Cldr.Calendar.UK
-      #DateRange<%Date{calendar: Cldr.Calendar.UK, day: 1, month: 1, year: 2019}, %Date{calendar: Cldr.Calendar.UK, day: 31, month: 12, year: 2019}>
-
-      iex> Cldr.Calendar.year 2019, Cldr.Calendar.NRF
-      #DateRange<%Date{calendar: Cldr.Calendar.NRF, day: 1, month: 1, year: 2019}, %Date{calendar: Cldr.Calendar.NRF, day: 7, month: 52, year: 2019}>
-
-  """
-  @spec year(Calendar.year(), calendar()) :: Date.Range.t()
-  @spec year(Date.t()) :: Date.Range.t()
-
-  def year(date) do
-    year(date.year, date.calendar)
-  end
-
-  def year(year, calendar) do
-    calendar.year(year)
-  end
-
-  @doc """
-  Returns a `Date.Range.t` that represents
-  the `quarter`.
-
-  The range is enumerable.
-
-  ## Arguments
-
-  * `year` is any `year` for `calendar`
-
-  * `quarter` is any `quarter` in the
-  `  year` for `calendar`
-
-  * `calendar` is any module that implements
-    the `Calendar` and `Cldr.Calendar`
-    behaviours
-
-  ## Returns
-
-  * A `Date.Range.t()` representing the
-    the enumerable days in the `quarter`
-
-  ## Examples
-
-      iex> Cldr.Calendar.quarter 2019, 2, Cldr.Calendar.UK
-      #DateRange<%Date{calendar: Cldr.Calendar.UK, day: 1, month: 4, year: 2019}, %Date{calendar: Cldr.Calendar.UK, day: 30, month: 6, year: 2019}>
-
-      iex> Cldr.Calendar.quarter 2019, 2, Cldr.Calendar.ISOWeek
-      #DateRange<%Date{calendar: Cldr.Calendar.ISOWeek, day: 1, month: 14, year: 2019}, %Date{calendar: Cldr.Calendar.ISOWeek, day: 7, month: 26, year: 2019}>
-
-  """
-  @spec quarter(Calendar.year(), Cldr.Calendar.quarter(), calendar()) :: Date.Range.t()
-  @spec quarter(Date.t()) :: Date.Range.t()
-
-  def quarter(date) do
-    quarter = quarter_of_year(date)
-    quarter(date.year, quarter, date.calendar)
-  end
-
-  def quarter(year, quarter, calendar) do
-    calendar.quarter(year, quarter)
-  end
-
-  @doc """
-  Returns a `Date.Range.t` that represents
-  the `year`.
-
-  The range is enumerable.
-
-  ## Arguments
-
-  * `year` is any `year` for `calendar`
-
-  * `month` is any `month` in the `year`
-    for `calendar`
-
-  * `calendar` is any module that implements
-    the `Calendar` and `Cldr.Calendar`
-    behaviours
-
-  ## Returns
-
-  * A `Date.Range.t()` representing the
-    the enumerable days in the `month`
-
-  ## Examples
-
-      iex> Cldr.Calendar.month 2019, 3, Cldr.Calendar.UK
-      #DateRange<%Date{calendar: Cldr.Calendar.UK, day: 1, month: 3, year: 2019}, %Date{calendar: Cldr.Calendar.UK, day: 30, month: 3, year: 2019}>
-
-      iex> Cldr.Calendar.month 2019, 3, Cldr.Calendar.US
-      #DateRange<%Date{calendar: Cldr.Calendar.US, day: 1, month: 3, year: 2019}, %Date{calendar: Cldr.Calendar.US, day: 31, month: 3, year: 2019}>
-
-  """
-  @spec month(Calendar.year(), Calendar.month(), calendar()) :: Date.Range.t()
-  @spec month(Date.t()) :: Date.Range.t()
-
-  def month(date) do
-    month = month_of_year(date)
-    month(date.year, month, date.calendar)
-  end
-
-  def month(year, month, calendar) do
-    calendar.month(year, month)
-  end
-
-  @doc """
-  Returns a `Date.Range.t` that represents
-  the `year`.
-
-  The range is enumerable.
-
-  ## Arguments
-
-  * `year` is any `year` for `calendar`
-
-  * `week` is any `week` in the `year`
-    for `calendar`
-
-  * `calendar` is any module that implements
-    the `Calendar` and `Cldr.Calendar`
-    behaviours
-
-  ## Returns
-
-  * A `Date.Range.t()` representing the
-    the enumerable days in the `week` or
-
-  * `{:error, :not_defined}` if the calendar
-    does not support the concept of weeks
-
-  ## Examples
-
-      iex> Cldr.Calendar.week 2019, 52, Cldr.Calendar.US
-      #DateRange<%Date{calendar: Cldr.Calendar.US, day: 22, month: 12, year: 2019}, %Date{calendar: Cldr.Calendar.US, day: 28, month: 12, year: 2019}>
-
-      iex> Cldr.Calendar.week 2019, 52, Cldr.Calendar.NRF
-      #DateRange<%Date{calendar: Cldr.Calendar.NRF, day: 1, month: 52, year: 2019}, %Date{calendar: Cldr.Calendar.NRF, day: 7, month: 52, year: 2019}>
-
-      iex> Cldr.Calendar.week 2019, 52, Cldr.Calendar.ISOWeek
-      #DateRange<%Date{calendar: Cldr.Calendar.ISOWeek, day: 1, month: 52, year: 2019}, %Date{calendar: Cldr.Calendar.ISOWeek, day: 7, month: 52, year: 2019}>
-
-      iex> Cldr.Calendar.week 2019, 52, Cldr.Calendar.Julian
-      {:error, :not_defined}
-
-  """
-  @spec week(Calendar.year(), Cldr.Calendar.week(), calendar()) :: Date.Range.t()
-  @spec week(Date.t()) :: Date.Range.t()
-
-  def week(date) do
-    {year, week} = week_of_year(date)
-    week(year, week, date.calendar)
-  end
-
-  def week(year, week, calendar) do
-    calendar.week(year, week)
-  end
-
-  @doc """
-  Returns a `Date.Range.t` that represents
-  the `day`.
-
-  The range is enumerable.
-
-  ## Arguments
-
-  * `year` is any `year` for `calendar`
-
-  * `day` is any `day` in the `year`
-    for `calendar`
-
-  * `calendar` is any module that implements
-    the `Calendar` and `Cldr.Calendar`
-    behaviours
-
-  ## Returns
-
-  * A `Date.Range.t()` representing the
-    the enumerable days in the `week`
-
-  ## Examples
-
-      iex> Cldr.Calendar.day 2019, 52, Cldr.Calendar.US
-      #DateRange<%Date{calendar: Cldr.Calendar.US, day: 21, month: 2, year: 2019}, %Date{calendar: Cldr.Calendar.US, day: 21, month: 2, year: 2019}>
-
-      iex(6)> Cldr.Calendar.day 2019, 92, Cldr.Calendar.NRF
-      #DateRange<%Date{calendar: Cldr.Calendar.NRF, day: 1, month: 14, year: 2019}, %Date{calendar: Cldr.Calendar.NRF, day: 1, month: 14, year: 2019}>
-
-      Cldr.Calendar.day 2019, 8, Cldr.Calendar.ISOWeek
-      #DateRange<%Date{calendar: Cldr.Calendar.ISOWeek, day: 1, month: 2, year: 2019}, %Date{calendar: Cldr.Calendar.ISOWeek, day: 1, month: 2, year: 2019}>
-
-  """
-  @spec day(Calendar.year(), Calendar.day(), calendar()) :: Date.Range.t()
-  @spec day(Date.t()) :: Date.Range.t()
-
-  def day(date) do
-    Date.range(date, date)
-  end
-
-  def day(year, day, calendar) do
-    if day <= calendar.days_in_year(year) do
-      iso_days = calendar.first_gregorian_day_of_year(year) + day - 1
-
-      with {year, month, day} = calendar.date_from_iso_days(iso_days),
-           {:ok, date} <- Date.new(year, month, day, calendar) do
-        day(date)
-      end
-    else
-      {:error, :invalid_date}
+  @doc false
+  def first_day_for_locale(%LanguageTag{territory: territory}) do
+    with {:ok, territory} <- Cldr.validate_territory(territory) do
+      first_day_for_locale(territory)
     end
+  end
+
+  @doc false
+  def min_days_for_locale(%LanguageTag{territory: territory}) do
+    with {:ok, territory} <- Cldr.validate_territory(territory) do
+      min_days_for_locale(territory)
+    end
+  end
+
+  @doc """
+  Returns a list of the days of the week that
+  are considered a weekend for a given
+  territory (country)
+
+  ## Arguments
+
+  * `territory` is any valid ISO3166-2 code
+
+  ## Returns
+
+  * A list of integers representing the days of
+    the week that are weekend days
+
+  ## Examples
+
+      iex> Cldr.Calendar.weekend("US")
+      [6, 7]
+
+      iex> Cldr.Calendar.weekend("IN")
+      [7]
+
+      iex> Cldr.Calendar.weekend("SA")
+      [5, 6]
+
+      iex> Cldr.Calendar.weekend("xx")
+      {:error, {Cldr.UnknownTerritoryError, "The territory \\"xx\\" is unknown"}}
+
+  """
+  def weekend(territory)
+
+  @doc """
+  Returns a list of the days of the week that
+  are considered a weekend for a given
+  territory (country)
+
+  ## Arguments
+
+  * `territory` is any valid ISO3166-2 code
+
+  ## Returns
+
+  * A list of integers representing the days of
+    the week that are week days
+
+  ## Notes
+
+  The list of days may not my monotonic. See
+  the example for Saudi Arabia below.
+
+  ## Examples
+
+      iex> Cldr.Calendar.weekdays("US")
+      [1, 2, 3, 4, 5]
+
+      iex> Cldr.Calendar.weekdays("IN")
+      [1, 2, 3, 4, 5, 6]
+
+      iex> Cldr.Calendar.weekdays("SA")
+      [1, 2, 3, 4, 7]
+
+      iex> Cldr.Calendar.weekdays("xx")
+      {:error, {Cldr.UnknownTerritoryError, "The territory \\"xx\\" is unknown"}}
+
+  """
+  def weekdays(territory)
+
+  @week_info Cldr.Config.week_info()
+
+  for territory <- Cldr.known_territories() do
+    starts =
+      get_in(@week_info, [:weekend_start, territory]) ||
+        get_in(@week_info, [:weekend_start, @the_world])
+
+    ends =
+      get_in(@week_info, [:weekend_end, territory]) ||
+        get_in(@week_info, [:weekend_end, @the_world])
+
+    first_day =
+      get_in(@week_info, [:first_day, territory]) ||
+        get_in(@week_info, [:first_day, @the_world])
+
+    min_days =
+      get_in(@week_info, [:min_days, territory]) ||
+        get_in(@week_info, [:min_days, @the_world])
+
+    def first_day_for_locale(unquote(territory)) do
+      unquote(first_day)
+    end
+
+    def min_days_for_locale(unquote(territory)) do
+      unquote(min_days)
+    end
+
+    def weekend(unquote(territory)) do
+      unquote(Enum.to_list(starts..ends))
+    end
+
+    def weekdays(unquote(territory)) do
+      unquote(@days -- Enum.to_list(starts..ends))
+    end
+  end
+
+  def first_day_for_locale(territory) do
+    with {:ok, territory} <- Cldr.validate_territory(territory) do
+      first_day_for_locale(territory)
+    end
+  end
+
+  def min_days_for_locale(territory) do
+    with {:ok, territory} <- Cldr.validate_territory(territory) do
+      min_days_for_locale(territory)
+    end
+  end
+
+  def weekend(territory) do
+    with {:ok, territory} <- Cldr.validate_territory(territory) do
+      weekend(territory)
+    end
+  end
+
+  def weekdays(territory) do
+    with {:ok, territory} <- Cldr.validate_territory(territory) do
+      weekdays(territory)
+    end
+  end
+
+  @doc """
+  Returns the number of days in `n` weeks
+
+  ## Example
+
+      iex> Cldr.Calendar.weeks_to_days(2)
+      14
+
+  """
+  @spec weeks_to_days(integer) :: integer
+  def weeks_to_days(n) do
+    n * @days_in_a_week
+  end
+
+  @doc """
+  Formats a date into a string representation
+
+  Note that the output is not decorated with
+  the calendar module name.
+
+  ## Example
+
+      iex> Cldr.Calendar.date_to_string ~D[2019-12-04]
+      "2019-12-04"
+      iex> Cldr.Calendar.date_to_string ~D[2019-23-04 Cldr.Calendar.NRF]
+      "2019-W23-4"
+
+  """
+  @spec date_to_string(Date.t()) :: String.t()
+  def date_to_string(date) do
+    %{year: year, month: month, day: day, calendar: calendar} = date
+    calendar.date_to_string(year, month, day)
+  end
+
+  @doc """
+  An `inspect_fun/2` that can be configured in
+  `Inspect.Opts` supporting inspection of user-defined
+  calendars.
+
+  This function can be configured in `IEx` for Elixir version 1.9
+  and later by:
+
+      IEx.configure(inspect: [inspect_fun: &Cldr.Calendar.inspect/2])
+      :ok
+
+  """
+  @spec inspect(term, list()) :: Inspect.Algebra.t()
+  def inspect(term, opts \\ [])
+
+  def inspect(%Date{calendar: Calendar.ISO} = date, opts) do
+    Kernel.inspect(date, opts)
+  end
+
+  def inspect(%Date{calendar: calendar, year: year, month: month, day: day}, opts) do
+    calendar.inspect_date(year, month, day, opts)
+  end
+
+  def inspect(%Date.Range{first: first, last: last}, _opts) do
+    calendar = first.calendar
+    "#<DateRange<" <> calendar.inspect_date(first) <> ".." <> calendar.inspect_date(last) <> ">"
+  end
+
+  def inspect(term, opts) do
+    Kernel.inspect(term, opts)
   end
 
   @doc """
@@ -1189,10 +1447,13 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
+      iex> Cldr.Calendar.current ~D[2019-01-01], :day
+      ~D[2019-01-01]
+
   """
   def current(%Date.Range{first: date}, :year) do
     current(date, :year)
-    |> year
+    |> Interval.year()
   end
 
   def current(date, :year) do
@@ -1201,7 +1462,7 @@ defmodule Cldr.Calendar do
 
   def current(%Date.Range{first: date}, :quarter) do
     current(date, :quarter)
-    |> quarter
+    |> Interval.quarter()
   end
 
   def current(date, :quarter) do
@@ -1210,7 +1471,7 @@ defmodule Cldr.Calendar do
 
   def current(%Date.Range{first: date}, :month) do
     current(date, :month)
-    |> month
+    |> Interval.month()
   end
 
   def current(date, :month) do
@@ -1219,7 +1480,7 @@ defmodule Cldr.Calendar do
 
   def current(%Date.Range{first: date}, :week) do
     current(date, :week)
-    |> week
+    |> Interval.week()
   end
 
   def current(date, :week) do
@@ -1228,7 +1489,7 @@ defmodule Cldr.Calendar do
 
   def current(%Date.Range{first: date}, :day) do
     current(date, :day)
-    |> day
+    |> Interval.day()
   end
 
   def current(date, :day) do
@@ -1236,7 +1497,7 @@ defmodule Cldr.Calendar do
   end
 
   @doc """
-  Returns the nexy date or date range for
+  Returns the next date or date range for
   a date period (year, quarter, month, week
   or day).
 
@@ -1256,30 +1517,39 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
+      iex> Cldr.Calendar.next ~D[2019-01-01], :day
+      ~D[2019-01-02]
+      iex> Cldr.Calendar.next ~D[2019-01-01], :month
+      ~D[2019-02-01]
+      iex> Cldr.Calendar.next ~D[2019-01-01], :quarter
+      ~D[2019-04-01]
+      iex> Cldr.Calendar.next ~D[2019-01-01], :year
+      ~D[2020-01-01]
+
   """
   def next(date_or_date_range, date_part, options \\ [])
 
   def next(%Date.Range{last: date}, :year, options) do
     next(date, :year, options)
-    |> year
+    |> Interval.year()
   end
 
   def next(date, :year, options) do
     plus(date, :years, 1, options)
   end
 
-  def next(%Date.Range{last: date}, :quarter, options) do
+  def next(%Date.Range{first: date}, :quarter, options) do
     next(date, :quarter, options)
-    |> quarter
+    |> Interval.quarter()
   end
 
   def next(date, :quarter, options) do
     plus(date, :quarters, 1, options)
   end
 
-  def next(%Date.Range{last: date}, :month, options) do
+  def next(%Date.Range{first: date}, :month, options) do
     next(date, :month, options)
-    |> month
+    |> Interval.month()
   end
 
   def next(date, :month, options) do
@@ -1288,7 +1558,7 @@ defmodule Cldr.Calendar do
 
   def next(%Date.Range{last: date}, :week, options) do
     next(date, :week, options)
-    |> week
+    |> Interval.week()
   end
 
   def next(date, :week, options) do
@@ -1297,7 +1567,7 @@ defmodule Cldr.Calendar do
 
   def next(%Date.Range{last: date}, :day, options) do
     next(date, :day, options)
-    |> day
+    |> Interval.day()
   end
 
   def next(date, :day, options) do
@@ -1328,30 +1598,39 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
+      iex> Cldr.Calendar.previous ~D[2019-01-01], :day
+      ~D[2018-12-31]
+      iex> Cldr.Calendar.previous ~D[2019-01-01], :quarter
+      ~D[2018-10-01]
+      iex> Cldr.Calendar.previous ~D[2019-01-01], :month
+      ~D[2018-12-01]
+      iex> Cldr.Calendar.previous ~D[2019-01-01], :year
+      ~D[2018-01-01]
+
   """
   def previous(date_or_date_range, date_part, options \\ [])
 
   def previous(%Date.Range{first: date}, :year, options) do
     previous(date, :year, options)
-    |> year
+    |> Interval.year()
   end
 
   def previous(date, :year, options) do
     plus(date, :years, -1, options)
   end
 
-  def previous(%Date.Range{first: date}, :quarter, options) do
+  def previous(%Date.Range{last: date}, :quarter, options) do
     previous(date, :quarter, options)
-    |> quarter
+    |> Interval.quarter()
   end
 
   def previous(date, :quarter, options) do
     minus(date, :quarters, 1, options)
   end
 
-  def previous(%Date.Range{first: date}, :month, options) do
+  def previous(%Date.Range{last: date}, :month, options) do
     previous(date, :month, options)
-    |> month
+    |> Interval.month()
   end
 
   def previous(date, :month, options) do
@@ -1360,7 +1639,7 @@ defmodule Cldr.Calendar do
 
   def previous(%Date.Range{first: date}, :week, options) do
     previous(date, :week, options)
-    |> week
+    |> Interval.week()
   end
 
   def previous(date, :week, options) do
@@ -1422,7 +1701,7 @@ defmodule Cldr.Calendar do
       "Mon"
 
       iex> Cldr.Calendar.localize ~D[2019-01-01], :days_of_week
-      ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+      [{1, "Mon"}, {2, "Tue"}, {3, "Wed"}, {4, "Thu"}, {5, "Fri"}, {6, "Sat"}, {7, "Sun"}]
 
       iex> Cldr.Calendar.localize ~D[2019-06-01], :era
       "AD"
@@ -1458,15 +1737,16 @@ defmodule Cldr.Calendar do
   def localize(date, part, options) do
     cldr_backend = backend_from_calendar(date.calendar)
     backend = Keyword.get(options, :backend, cldr_backend || Cldr.default_backend())
-    backend = Module.concat(backend, Calendar)
     locale = Keyword.get(options, :locale, Cldr.get_locale())
+    type = Keyword.get(options, :type, :format)
     format = Keyword.get(options, :format, :abbreviated)
 
     with {:ok, locale} <- Cldr.validate_locale(locale),
          {:ok, part} <- validate_part(part),
+         {:ok, type} <- validate_type(type),
          {:ok, format} <- validate_format(format),
          {:ok, backend} <- validate_backend(backend) do
-      localize(date, part, format, backend, locale)
+      localize(date, part, type, format, backend, locale)
     end
   end
 
@@ -1479,7 +1759,8 @@ defmodule Cldr.Calendar do
   end
 
   @doc false
-  def localize(date, :era, format, backend, locale) do
+  def localize(date, :era, _type, format, backend, locale) do
+    backend = Module.concat(backend, Calendar)
     {_, era} = day_of_era(date)
 
     locale
@@ -1488,37 +1769,77 @@ defmodule Cldr.Calendar do
   end
 
   @doc false
-  def localize(date, :quarter, format, backend, locale) do
+  def localize(date, :quarter, type, format, backend, locale) do
+    backend = Module.concat(backend, Calendar)
     quarter = quarter_of_year(date)
 
     locale
     |> backend.quarters(date.calendar.cldr_calendar_type)
-    |> get_in([:format, format, quarter])
+    |> get_in([type, format, quarter])
   end
 
   @doc false
-  def localize(date, :month, format, backend, locale) do
+  def localize(date, :month, type, format, backend, locale) do
+    backend = Module.concat(backend, Calendar)
     month = month_of_year(date)
 
     locale
     |> backend.months(date.calendar.cldr_calendar_type)
-    |> get_in([:format, format, month])
+    |> get_in([type, format, month])
   end
 
   @doc false
-  def localize(date, :day_of_week, format, backend, locale) do
+  def localize(date, :day_of_week, type, format, backend, locale) do
+    backend = Module.concat(backend, Calendar)
     day = day_of_week(date)
 
     locale
     |> backend.days(date.calendar.cldr_calendar_type)
-    |> get_in([:format, format, day])
+    |> get_in([type, format, day])
   end
 
   @doc false
-  def localize(date, :days_of_week, format, backend, locale) do
-    for date <- Cldr.Calendar.week(date) do
-      localize(date, :day_of_week, format, backend, locale)
+  def localize(date, :days_of_week, type, format, backend, locale) do
+    backend = Module.concat(backend, Calendar)
+
+    for date <- Interval.week(date) do
+      day_of_week = day_of_week(date)
+
+      day_name =
+        locale
+        |> backend.days(date.calendar.cldr_calendar_type)
+        |> get_in([type, format, day_of_week])
+
+      {day_of_week, day_name}
     end
+  end
+
+  @doc false
+  def localize(%{hour: hour} = time, :am_pm, type, format, backend, locale) do
+    backend = Module.concat(backend, Calendar)
+    am_pm = if hour < 12 or rem(hour, 24) < 12, do: :am, else: :pm
+    calendar = Map.get(time, :calendar, @default_calendar)
+
+    locale
+    |> backend.day_periods(calendar.cldr_calendar_type)
+    |> get_in([type, format, am_pm])
+  end
+
+  @doc false
+  def localize(
+        day_period,
+        :day_periods,
+        type,
+        format,
+        backend,
+        locale,
+        calendar \\ @default_calendar
+      ) do
+    backend = Module.concat(backend, Calendar)
+
+    locale
+    |> backend.day_periods(calendar.cldr_calendar_type)
+    |> get_in([type, format, day_period])
   end
 
   @valid_parts [:era, :quarter, :month, :day_of_week, :days_of_week]
@@ -1530,6 +1851,18 @@ defmodule Cldr.Calendar do
        {ArgumentError,
         "The date part #{inspect(part)} is not known. " <>
           "Valid date parts are #{inspect(@valid_parts)}"}}
+    end
+  end
+
+  @valid_types [:format, :stand_alone]
+  defp validate_type(type) do
+    if type in @valid_types do
+      {:ok, type}
+    else
+      {:error,
+       {ArgumentError,
+        "The date format type #{inspect(type)} is not known. " <>
+          "Valid format type are #{inspect(@valid_types)}"}}
     end
   end
 
@@ -1588,6 +1921,21 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
+      iex> Cldr.Calendar.plus ~D[2016-02-29], :days, 1
+      ~D[2016-03-01]
+      iex> Cldr.Calendar.plus ~D[2019-03-01], :months, 1
+      ~D[2019-04-01]
+      iex> Cldr.Calendar.plus ~D[2016-02-29], :days, 1
+      ~D[2016-03-01]
+      iex> Cldr.Calendar.plus ~D[2019-02-28], :days, 1
+      ~D[2019-03-01]
+      iex> Cldr.Calendar.plus ~D[2019-03-01], :months, 1
+      ~D[2019-04-01]
+      iex> Cldr.Calendar.plus ~D[2019-03-01], :quarters, 1
+      ~D[2019-06-01]
+      iex> Cldr.Calendar.plus ~D[2019-03-01], :years, 1
+      ~D[2020-03-01]
+
   """
   def plus(value, increment) when is_integer(value) and is_integer(increment) do
     value + increment
@@ -1598,9 +1946,21 @@ defmodule Cldr.Calendar do
 
   def plus(date, period, increment, options \\ [])
 
+  def plus(%Date.Range{first: %{calendar: Calendar.ISO} = first}, period, increment, options) do
+    %{first | calendar: Cldr.Calendar.Gregorian}
+    |> plus(period, increment, options)
+    |> coerce_iso_calendar
+  end
+
+  def plus(%{calendar: Calendar.ISO} = date, period, increment, options) do
+    %{date | calendar: Cldr.Calendar.Gregorian}
+    |> plus(period, increment, options)
+    |> coerce_iso_calendar
+  end
+
   def plus(%Date.Range{last: date}, :years, years, options) do
     plus(date, :years, years, options)
-    |> year
+    |> Interval.year()
   end
 
   def plus(date, :years, years, options) do
@@ -1617,7 +1977,7 @@ defmodule Cldr.Calendar do
 
   def plus(%Date.Range{last: date}, :quarters, quarters, _options) do
     plus(date, :quarters, quarters)
-    |> quarter
+    |> Interval.quarter()
   end
 
   def plus(date, :quarters, quarters, _options) do
@@ -1629,7 +1989,7 @@ defmodule Cldr.Calendar do
 
   def plus(%Date.Range{last: date}, :months, months, _options) do
     plus(date, :months, months)
-    |> month
+    |> Interval.month()
   end
 
   def plus(date, :months, months, options) do
@@ -1641,7 +2001,7 @@ defmodule Cldr.Calendar do
 
   def plus(%Date.Range{last: date}, :weeks, weeks, _options) do
     plus(date, :weeks, weeks)
-    |> week
+    |> Interval.week()
   end
 
   def plus(%{calendar: calendar} = date, :weeks, weeks, _options) do
@@ -1653,7 +2013,7 @@ defmodule Cldr.Calendar do
 
   def plus(%Date.Range{last: date}, :days, days, _options) do
     plus(date, :days, days)
-    |> day
+    |> Interval.day()
   end
 
   def plus(%{calendar: calendar} = date, :days, days, _options) do
@@ -1663,11 +2023,12 @@ defmodule Cldr.Calendar do
     |> date_from_iso_days(calendar)
   end
 
-  defp month_day(_year, month, day, _calendar, false) do
+  @doc false
+  def month_day(_year, month, day, _calendar, false) do
     {month, day}
   end
 
-  defp month_day(year, month, day, calendar, true) do
+  def month_day(year, month, day, calendar, true) do
     new_month =
       year
       |> calendar.periods_in_year
@@ -1713,21 +2074,20 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
-      iex> import Cldr.Calendar.Sigils
-      iex> Cldr.Calendar.minus ~d[2016-03-01], :days, 1
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 29, month: 2, year: 2016}
-      iex> Cldr.Calendar.minus ~d[2019-03-01], :months, 1
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 1, month: 2, year: 2019}
-      iex> Cldr.Calendar.minus ~d[2016-03-01], :days, 1
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 29, month: 2, year: 2016}
-      iex> Cldr.Calendar.minus ~d[2019-03-01], :days, 1
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 28, month: 2, year: 2019}
-      iex> Cldr.Calendar.minus ~d[2019-03-01], :months, 1
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 1, month: 2, year: 2019}
-      iex> Cldr.Calendar.minus ~d[2019-03-01], :quarters, 1
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 1, month: 12, year: 2018}
-      iex> Cldr.Calendar.minus ~d[2019-03-01], :years, 1
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 1, month: 3, year: 2018}
+      iex> Cldr.Calendar.minus ~D[2016-03-01], :days, 1
+      ~D[2016-02-29]
+      iex> Cldr.Calendar.minus ~D[2019-03-01], :months, 1
+      ~D[2019-02-01]
+      iex> Cldr.Calendar.minus ~D[2016-03-01], :days, 1
+      ~D[2016-02-29]
+      iex> Cldr.Calendar.minus ~D[2019-03-01], :days, 1
+      ~D[2019-02-28]
+      iex> Cldr.Calendar.minus ~D[2019-03-01], :months, 1
+      ~D[2019-02-01]
+      iex> Cldr.Calendar.minus ~D[2019-03-01], :quarters, 1
+      ~D[2018-12-01]
+      iex> Cldr.Calendar.minus ~D[2019-03-01], :years, 1
+      ~D[2018-03-01]
 
   """
   def minus(%{calendar: _calendar} = date, period, amount, options \\ []) do
@@ -1765,26 +2125,15 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
-      iex> import Cldr.Calendar.Sigils
-      Cldr.Calendar.Sigils
-      iex> d = ~d[2019-01-31]
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 1, year: 2019}
-      iex> d2 = ~d[2019-05-31]
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 5, year: 2019}
+      iex> d = ~D[2019-01-31]
+      ~D[2019-01-31]
+      iex> d2 = ~D[2019-05-31]
+      ~D[2019-05-31]
       iex> Cldr.Calendar.interval d, 3, :months
-      [
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 1, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 28, month: 2, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 3, year: 2019}
-      ]
+      [~D[2019-01-31], ~D[2019-02-28], ~D[2019-03-31]]
       iex> Cldr.Calendar.interval d, d2, :months
-      [
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 1, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 28, month: 2, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 3, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 30, month: 4, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 5, year: 2019}
-      ]
+      [~D[2019-01-31], ~D[2019-02-28], ~D[2019-03-31],
+       ~D[2019-04-30], ~D[2019-05-31]]
 
   """
   @spec interval(date_from :: Date.t(), date_to_or_count :: Date.t() | non_neg_integer, precision) ::
@@ -1849,26 +2198,15 @@ defmodule Cldr.Calendar do
 
   ## Examples
 
-      iex> import Cldr.Calendar.Sigils
-      Cldr.Calendar.Sigils
-      iex> d = ~d[2019-01-31]
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 1, year: 2019}
-      iex> d2 = ~d[2019-05-31]
-      %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 5, year: 2019}
+      iex> d = ~D[2019-01-31]
+      ~D[2019-01-31]
+      iex> d2 = ~D[2019-05-31]
+      ~D[2019-05-31]
       iex> Cldr.Calendar.interval_stream(d, 3, :months) |> Enum.to_list
-      [
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 1, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 28, month: 2, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 3, year: 2019}
-      ]
+      [~D[2019-01-31], ~D[2019-02-28], ~D[2019-03-31]]
       iex> Cldr.Calendar.interval_stream(d, d2, :months) |> Enum.to_list
-      [
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 1, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 28, month: 2, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 3, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 30, month: 4, year: 2019},
-        %Date{calendar: Cldr.Calendar.Gregorian, day: 31, month: 5, year: 2019}
-      ]
+      [~D[2019-01-31], ~D[2019-02-28], ~D[2019-03-31],
+       ~D[2019-04-30], ~D[2019-05-31]]
 
   """
   @spec interval_stream(
@@ -1905,7 +2243,8 @@ defmodule Cldr.Calendar do
     end
   end
 
-  def interval_stream_forward(date_from, date_to, precision) when precision in @valid_precision do
+  defp interval_stream_forward(date_from, date_to, precision)
+       when precision in @valid_precision do
     Stream.resource(
       fn ->
         {date_from, date_to, precision, 0}
@@ -1923,8 +2262,8 @@ defmodule Cldr.Calendar do
     )
   end
 
-  def interval_stream_backward(date_from, date_to, precision)
-      when precision in @valid_precision do
+  defp interval_stream_backward(date_from, date_to, precision)
+       when precision in @valid_precision do
     Stream.resource(
       fn ->
         {date_from, date_to, precision, 0}
@@ -2088,333 +2427,73 @@ defmodule Cldr.Calendar do
   # Helpers
   #
 
-  @doc false
-  def first_day_for_locale(%LanguageTag{territory: territory}) do
-    with {:ok, territory} <- Cldr.validate_territory(territory) do
-      first_day_for_locale(territory)
-    end
-  end
-
-  @doc false
-  def min_days_for_locale(%LanguageTag{territory: territory}) do
-    with {:ok, territory} <- Cldr.validate_territory(territory) do
-      min_days_for_locale(territory)
-    end
-  end
-
-  @week_info Cldr.Config.week_info()
-
-  for territory <- Cldr.known_territories() do
-    starts =
-      get_in(@week_info, [:weekend_start, territory]) ||
-        get_in(@week_info, [:weekend_start, @the_world])
-
-    ends =
-      get_in(@week_info, [:weekend_end, territory]) ||
-        get_in(@week_info, [:weekend_end, @the_world])
-
-    first_day =
-      get_in(@week_info, [:first_day, territory]) ||
-        get_in(@week_info, [:first_day, @the_world])
-
-    min_days =
-      get_in(@week_info, [:min_days, territory]) ||
-        get_in(@week_info, [:min_days, @the_world])
-
-    def first_day_for_locale(unquote(territory)) do
-      unquote(first_day)
-    end
-
-    def min_days_for_locale(unquote(territory)) do
-      unquote(min_days)
-    end
-
-    def weekend(unquote(territory)) do
-      unquote(Enum.to_list(starts..ends))
-    end
-
-    def weekdays(unquote(territory)) do
-      unquote(@days -- Enum.to_list(starts..ends))
-    end
-  end
-
-  def first_day_for_locale(territory) do
-    with {:ok, territory} <- Cldr.validate_territory(territory) do
-      first_day_for_locale(territory)
-    end
-  end
-
-  def min_days_for_locale(territory) do
-    with {:ok, territory} <- Cldr.validate_territory(territory) do
-      min_days_for_locale(territory)
-    end
-  end
-
-  @doc """
-  Returns a list of the days of the week that
-  are considered a weekend for a given
-  territory (country)
-
-  ## Arguments
-
-  * `territory` is any valid ISO3166-2 code
-
-  ## Returns
-
-  * A list of integers representing the days of
-    the week that are weekend days
-
-  ## Examples
-
-      iex> Cldr.Calendar.weekend("US")
-      [6, 7]
-
-      iex> Cldr.Calendar.weekend("IN")
-      [7]
-
-      iex> Cldr.Calendar.weekend("SA")
-      [5, 6]
-
-      iex> Cldr.Calendar.weekend("xx")
-      {:error, {Cldr.UnknownTerritoryError, "The territory \\"xx\\" is unknown"}}
-
-  """
-  def weekend(territory) do
-    with {:ok, territory} <- Cldr.validate_territory(territory) do
-      weekend(territory)
-    end
-  end
-
-  @doc """
-  Returns a list of the days of the week that
-  are considered a weekend for a given
-  territory (country)
-
-  ## Arguments
-
-  * `territory` is any valid ISO3166-2 code
-
-  ## Returns
-
-  * A list of integers representing the days of
-    the week that are week days
-
-  ## Notes
-
-  The list of days may not my monotonic. See
-  the example for Saudi Arabia below.
-
-  ## Examples
-
-      iex> Cldr.Calendar.weekdays("US")
-      [1, 2, 3, 4, 5]
-
-      iex> Cldr.Calendar.weekdays("IN")
-      [1, 2, 3, 4, 5, 6]
-
-      iex> Cldr.Calendar.weekdays("SA")
-      [1, 2, 3, 4, 7]
-
-      iex> Cldr.Calendar.weekdays("xx")
-      {:error, {Cldr.UnknownTerritoryError, "The territory \\"xx\\" is unknown"}}
-
-  """
-  def weekdays(territory) do
-    with {:ok, territory} <- Cldr.validate_territory(territory) do
-      weekdays(territory)
-    end
-  end
-
-  @doc false
-
   ## January starts end the same year, December ends starts the same year
-  def start_end_gregorian_years(year, %Config{first_or_last: :first, month: 1}) do
+  @doc false
+  def start_end_gregorian_years(year, %Config{first_or_last: :first, month_of_year: 1}) do
     {year, year}
   end
 
-  def start_end_gregorian_years(year, %Config{first_or_last: :last, month: 12}) do
+  @doc false
+  def start_end_gregorian_years(year, %Config{first_or_last: :last, month_of_year: 12}) do
     {year, year}
   end
 
   ## Majority years
+  @doc false
   def start_end_gregorian_years(year, %Config{
         first_or_last: :first,
         year: :majority,
-        month: month
+        month_of_year: month
       })
       when month <= 6 do
     {year, year + 1}
   end
 
+  @doc false
   def start_end_gregorian_years(year, %Config{
         first_or_last: :first,
         year: :majority,
-        month: month
+        month_of_year: month
       })
       when month > 6 do
     {year - 1, year}
   end
 
-  def start_end_gregorian_years(year, %Config{first_or_last: :last, year: :majority, month: month})
+  @doc false
+  def start_end_gregorian_years(year, %Config{
+        first_or_last: :last,
+        year: :majority,
+        month_of_year: month
+      })
       when month > 6 do
     {year - 1, year}
   end
 
-  def start_end_gregorian_years(year, %Config{first_or_last: :last, year: :majority, month: month})
+  @doc false
+  def start_end_gregorian_years(year, %Config{
+        first_or_last: :last,
+        year: :majority,
+        month_of_year: month
+      })
       when month <= 6 do
     {year, year + 1}
   end
 
   ## Beginning years
+  @doc false
   def start_end_gregorian_years(year, %Config{first_or_last: :last, year: :beginning}) do
     {year - 1, year}
   end
 
   ## Ending years
+  @doc false
   def start_end_gregorian_years(year, %Config{first_or_last: :first, year: :ending}) do
     {year, year + 1}
-  end
-
-  @doc """
-  Returns the number of days in `n` weeks
-
-  ## Example
-
-      iex> Cldr.Calendar.weeks_to_days(2)
-      14
-
-  """
-  @spec weeks_to_days(integer) :: integer
-  def weeks_to_days(n) do
-    n * @days_in_a_week
-  end
-
-  @doc """
-  Formats a date into a string representation
-
-  ## Example
-
-      iex> import Cldr.Calendar.Sigils
-      iex> Cldr.Calendar.date_to_string ~d[2019-12-04]
-      "2019-12-04"
-      iex> Cldr.Calendar.date_to_string ~d[2019-23-04]NRF
-      "2019-W23-4"
-
-  """
-  def date_to_string(date) do
-    %{year: year, month: month, day: day, calendar: calendar} = date
-    calendar.date_to_string(year, month, day)
   end
 
   @doc false
   def calendar_error(calendar_name) do
     {Cldr.UnknownCalendarError, "The calendar #{inspect(calendar_name)} is not known."}
-  end
-
-  @doc false
-  def extract_options(options) do
-    backend = Keyword.get(options, :backend)
-    locale = Keyword.get(options, :locale, Cldr.get_locale())
-    calendar = Keyword.get(options, :calendar)
-    first_or_last = Keyword.get(options, :first_or_last, :first)
-    begins_or_ends = Keyword.get(options, :begins_or_ends, :begins)
-    weeks_in_month = Keyword.get(options, :weeks_in_month, [4, 5, 4])
-    year = Keyword.get(options, :year, :majority)
-    month = Keyword.get(options, :month, 1)
-    {min_days, day} = min_and_first_days(locale, options)
-
-    %Config{
-      min_days: min_days,
-      day: day,
-      month: month,
-      year: year,
-      cldr_backend: backend,
-      calendar: calendar,
-      first_or_last: first_or_last,
-      begins_or_ends: begins_or_ends,
-      weeks_in_month: weeks_in_month
-    }
-  end
-
-  defp min_and_first_days(_locale, options) do
-    min_days = Keyword.get(options, :min_days, 7)
-    first_day = Keyword.get(options, :day, 1)
-    {min_days, first_day}
-  end
-
-  @valid_weeks_in_month [[4, 4, 5], [4, 5, 4], [5, 4, 4]]
-  @valid_year [:majority, :beginning, :ending]
-  def validate_config(config, :week) do
-    with :ok <- assert(config.day in 1..7, day_error(config.day)),
-         :ok <- assert(config.month in 1..12, month_error(config.month)),
-         :ok <- assert(config.year in @valid_year, year_error(config.year)),
-         :ok <- assert(config.min_days in 1..7, min_days_for_locale_error(config.min_days)),
-         :ok <-
-           assert(
-             config.first_or_last in [:first, :last],
-             first_or_last_error(config.first_or_last)
-           ),
-         :ok <-
-           assert(
-             config.begins_or_ends in [:begins, :ends],
-             begins_or_ends_error(config.begins_or_ends)
-           ),
-         :ok <-
-           assert(
-             config.weeks_in_month in @valid_weeks_in_month,
-             weeks_in_month_error(config.weeks_in_month)
-           ) do
-      {:ok, config}
-    end
-  end
-
-  @doc false
-  def validate_config(config, :month) do
-    validate_config(config, :week)
-  end
-
-  @doc false
-  def validate_config!(config, calendar_type) do
-    case validate_config(config, calendar_type) do
-      {:ok, config} -> config
-      {:error, message} -> raise ArgumentError, message
-    end
-  end
-
-  defp assert(true, _) do
-    :ok
-  end
-
-  defp assert(false, message) do
-    {:error, message}
-  end
-
-  defp day_error(day) do
-    ":day must be in the range 1..7. Found #{inspect(day)}."
-  end
-
-  defp month_error(month) do
-    ":month must be in the range 1..12. Found #{inspect(month)}."
-  end
-
-  defp year_error(year) do
-    ":year must be either :beginning, :ending or :majority. Found #{inspect(year)}."
-  end
-
-  defp min_days_for_locale_error(min_days) do
-    ":min_days must be in the rnage 1..7. Found #{inspect(min_days)}."
-  end
-
-  defp first_or_last_error(first_or_last) do
-    ":first_or_last must be :first or :last. Found #{inspect(first_or_last)}."
-  end
-
-  defp begins_or_ends_error(begins_or_ends) do
-    ":begins_or_ends must be :begins or :ends. Found #{inspect(begins_or_ends)}."
-  end
-
-  defp weeks_in_month_error(weeks_in_month) do
-    ":weeks_in_month must be [4,4,5], [4,5,4] or [5,4,4]. Found #{inspect(weeks_in_month)}"
   end
 
   @doc false
@@ -2454,6 +2533,24 @@ defmodule Cldr.Calendar do
 
   def zero_pad(val, count) do
     "-" <> zero_pad(-val, count)
+  end
+
+  @doc false
+  def coerce_iso_calendar({:error, :invalid_date}) do
+    {:error, :invalid_date}
+  end
+
+  def coerce_iso_calendar(%Date.Range{} = range) do
+    Date.range(coerce_iso_calendar(range.first), coerce_iso_calendar(range.last))
+  end
+
+  def coerce_iso_calendar(date) do
+    %{date | calendar: Calendar.ISO}
+  end
+
+  @doc false
+  def calendar_name(module) when is_atom(module) do
+    Kernel.inspect(module)
   end
 
   defdelegate day_of_week(date), to: Date

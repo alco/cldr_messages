@@ -1,1 +1,0 @@
-    <td<%= if class, do: " class=#{inspect(class)}", else: ""%>><%= day %></td>

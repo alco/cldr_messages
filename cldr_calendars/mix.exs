@@ -1,17 +1,17 @@
 defmodule Cldr.Calendar.MixProject do
   use Mix.Project
 
-  @version "0.4.1"
+  @version "1.5.1"
 
   def project do
     [
       app: :ex_cldr_calendars,
       version: @version,
-      elixir: "~> 1.5",
+      elixir: "~> 1.8",
       deps: deps(),
       elixirc_paths: elixirc_paths(Mix.env()),
       name: "Cldr Calendars",
-      source_url: "https://github.com/kipcole9/cldr_calendars",
+      source_url: "https://github.com/elixir-cldr/cldr_calendars",
       docs: docs(),
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,
@@ -23,7 +23,8 @@ defmodule Cldr.Calendar.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       dialyzer: [
         ignore_warnings: ".dialyzer_ignore_warnings",
-        plt_add_apps: ~w(inets jason mix)a
+        plt_add_apps:
+          ~w(inets jason mix ex_cldr_currencies ex_cldr_units ex_cldr_lists ex_cldr_numbers)a
       ],
       compilers: Mix.compilers()
     ]
@@ -31,8 +32,8 @@ defmodule Cldr.Calendar.MixProject do
 
   defp description do
     """
-    Calendars and calendar functions and a set
-    of localised month-based and week-based calendars.
+    Localized month- and week-based calendars and calendar functions
+    based upon CLDR data.
     """
   end
 
@@ -61,21 +62,24 @@ defmodule Cldr.Calendar.MixProject do
 
   defp deps do
     [
-      {:ex_cldr, "~> 2.5"},
-      {:cldr_utils, "~> 2.2.0"},
+      {:ex_cldr, "~> 2.8"},
+      {:ex_cldr_units, "~> 2.0", optional: true},
+      {:ex_cldr_lists, "~> 2.4", optional: true},
       {:jason, "~> 1.0"},
       {:ex_doc, "~> 0.18", only: [:release, :dev]},
-      {:nimble_csv, "~> 0.5", only: [:dev, :test, :release]},
       {:benchee, "~> 0.14", optional: true, only: [:dev, :test]},
-      {:dialyxir, "~> 1.0.0-rc.4", only: [:dev], runtime: false}
+      {:dialyxir, "~> 1.0.0-rc", only: [:dev], runtime: false},
+      {:nimble_strftime, "~> 0.1", only: :test},
+      {:stream_data, "~> 0.4", only: :test}
     ]
   end
 
   def links do
     %{
-      "GitHub" => "https://github.com/kipcole9/cldr_calendars",
-      "Readme" => "https://github.com/kipcole9/cldr_calendars/blob/v#{@version}/README.md",
-      "Changelog" => "https://github.com/kipcole9/cldr_calendars/blob/v#{@version}/CHANGELOG.md"
+      "GitHub" => "https://github.com/elixir-cldr/cldr_calendars",
+      "Readme" => "https://github.com/elixir-cldr/cldr_calendars/blob/v#{@version}/README.md",
+      "Changelog" =>
+        "https://github.com/elixir-cldr/cldr_calendars/blob/v#{@version}/CHANGELOG.md"
     }
   end
 
@@ -97,7 +101,7 @@ defmodule Cldr.Calendar.MixProject do
     []
   end
 
-  defp elixirc_paths(:test), do: ["lib", "mix", "src", "test"]
-  defp elixirc_paths(:dev), do: ["lib", "mix", "src", "bench"]
-  defp elixirc_paths(_), do: ["lib", "src"]
+  defp elixirc_paths(:test), do: ["lib", "mix", "test", "test/support"]
+  defp elixirc_paths(:dev), do: ["lib", "mix", "bench"]
+  defp elixirc_paths(_), do: ["lib"]
 end
