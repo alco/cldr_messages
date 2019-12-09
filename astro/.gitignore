@@ -21,3 +21,8 @@ erl_crash.dump
 
 # asdf
 .tool-versions
+
+# timezone data
+/priv/timezones.data
+/priv/timezones-geodata.etf.zip
+
