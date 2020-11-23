@@ -244,7 +244,7 @@ defmodule Cldr.Calendar do
 
   @days [1, 2, 3, 4, 5, 6, 7]
   @days_in_a_week Enum.count(@days)
-  @the_world :"001"
+  @the_world Cldr.the_world()
   @valid_precision [:years, :quarters, :months, :weeks, :days]
   @default_calendar Cldr.Calendar.Gregorian
 
@@ -284,7 +284,7 @@ defmodule Cldr.Calendar do
     `:week` indicating whcih type of calendar is to
     be created
 
-  * `config` is a keyword list defining the configuration
+  * `config` is a Keyword list defining the configuration
     of the calendar.
 
   ## Returns
@@ -293,7 +293,7 @@ defmodule Cldr.Calendar do
     module that conforms to the `Calendar` and `Cldr.Calendar`
     behaviours or
 
-  * `{already_exists, module}` if a module of the given
+  * `{:module_already_exists, module}` if a module of the given
     calendar name already exists. It is not guaranteed
     that the module is in fact a calendar module in this case.
 
@@ -301,11 +301,6 @@ defmodule Cldr.Calendar do
 
   The following options can be provided to create
   a new calendar.
-
-  * `:locale`  can be any configured locale. If
-    provided it will be used to determine the
-    `:day_of_year` and `:days_in_first_week`
-    option values. The default value is `nil`
 
   * `:cldr_backend` defines a default
     backend module to be used for this calendar.
@@ -391,8 +386,7 @@ defmodule Cldr.Calendar do
       ...>   first_or_last: :first,
       ...>   weeks_in_month: [4, 5, 4],
       ...>   year: :majority,
-      ...>   cldr_backend: nil,
-      ...>   locale: nil
+      ...>   cldr_backend: nil
       {:ok, ISOWeek}
   ```
   Note that `Cldr.Calendar.ISOWeek` is included as part of this
@@ -400,25 +394,96 @@ defmodule Cldr.Calendar do
 
   """
   @spec new(module(), calendar_type(), Keyword.t()) ::
-          {:ok, calendar()} | {:already_exists, module()}
+          {:ok, calendar()} | {:module_already_exists, module()}
 
   def new(calendar_module, calendar_type, config)
       when is_atom(calendar_module) and calendar_type in [:week, :month] do
     if Code.ensure_loaded?(calendar_module) do
-      {:already_exists, calendar_module}
+      {:module_already_exists, calendar_module}
     else
       create_calendar(calendar_module, calendar_type, config)
     end
   end
 
+  @doc """
+  Returns a calendar configured according to
+  the preferences defined for a locale.
+
+  """
+  @base_calendar_name Cldr.Calendar
+  def calendar_for_locale(locale, options \\ [])
+
+  def calendar_for_locale(%LanguageTag{} = locale, config) do
+    locale
+    |> Cldr.Locale.territory_from_locale()
+    |> calendar_for_territory(config)
+  end
+
+  def calendar_for_locale(locale_name, config) when is_binary(locale_name) do
+    backend = Keyword.get_lazy(config, :backend, &Cldr.default_backend/0)
+
+    with {:ok, backend} <- Cldr.validate_backend(backend),
+         {:ok, locale} <- Cldr.validate_locale(locale_name, backend) do
+      calendar_for_locale(locale, config)
+    end
+  end
+
+  @doc """
+  Returns a calendar configured according to
+  the preferences defined for a territory.
+
+  """
+  def calendar_for_territory(territory, config \\ []) do
+    with {:ok, territory} <- Cldr.validate_territory(territory) do
+      calendar_name = Module.concat(@base_calendar_name, territory)
+
+      config =
+        config
+        |> Keyword.put_new(:min_days_in_first_week, min_days_for_territory(territory))
+        |> Keyword.put_new(:day_of_week, first_day_for_territory(territory))
+
+      cond do
+        same_as_default?(config) -> {:ok, Cldr.Calendar.default_calendar()}
+        calendar_module?(calendar_name) -> {:ok, calendar_name}
+        true -> create_calendar(calendar_name, :month, config)
+      end
+    end
+  end
+
+  @doc """
+  Returns a boolean indicating if a module
+  is a `Cldr.Calendar` module
+
+  """
+  def calendar_module?(module) when is_atom(module) do
+    Code.ensure_loaded?(module) &&
+      function_exported?(module, :cldr_calendar_type, 0)
+  end
+
+  def same_as_default?(config) do
+    config = Config.extract_options(config)
+
+    default_calendar_config =
+      Cldr.Calendar.default_calendar().__config__()
+      |> Map.put(:calendar, nil)
+
+    config == default_calendar_config
+  end
+
   defp create_calendar(calendar_module, calendar_type, config) do
+    config = Keyword.put(config, :calendar, calendar_module)
     structured_config = Config.extract_options(config)
 
-    with {:ok, _} <- Config.validate_config(structured_config, calendar_type) do
+    with {:ok, config} <- Config.validate_config(structured_config, calendar_type) do
       calendar_type =
         calendar_type
         |> to_string
         |> String.capitalize()
+
+      config =
+        config
+        |> Map.from_struct()
+        |> Map.to_list()
 
       contents =
         quote do
@@ -1030,10 +1095,13 @@ defmodule Cldr.Calendar do
 
       iex> Cldr.Calendar.weeks_in_year ~D[2026-W01-1 Cldr.Calendar.ISOWeek]
       53
+
       iex> Cldr.Calendar.weeks_in_year ~D[2019-01-01]
       52
+
       iex> Cldr.Calendar.weeks_in_year ~D[2020-01-01]
-      53
+      52
+
       iex> Cldr.Calendar.weeks_in_year 2020, Cldr.Calendar.ISOWeek
       53
 
@@ -1066,7 +1134,7 @@ defmodule Cldr.Calendar do
 
   * `date` is any `Date.t()`
 
-  * `options` is a keyword list of options
+  * `options` is a Keyword list of options
 
   ## Options
 
@@ -1131,8 +1199,8 @@ defmodule Cldr.Calendar do
   @spec weekend?(Date.t(), Keyword.t()) :: boolean | {:error, {module(), String.t()}}
 
   def weekend?(date, options \\ []) do
-    locale = Keyword.get(options, :locale, Cldr.get_locale())
-    backend = Keyword.get(options, :backend, Cldr.default_backend())
+    backend = Keyword.get_lazy(options, :backend, &Cldr.default_backend/0)
+    locale = Keyword.get(options, :locale, backend.get_locale())
 
     with {:ok, locale} <- Cldr.validate_locale(locale, backend),
          territory = Keyword.get(options, :territory, locale.territory),
@@ -1151,7 +1219,7 @@ defmodule Cldr.Calendar do
 
   * `date` is any `Date.t()`
 
-  * `options` is a keyword list of options
+  * `options` is a Keyword list of options
 
   ## Options
 
@@ -1209,8 +1277,8 @@ defmodule Cldr.Calendar do
   @spec weekday?(Date.t(), Keyword.t()) :: boolean | {:error, {module(), String.t()}}
 
   def weekday?(date, options \\ []) do
-    locale = Keyword.get(options, :locale, Cldr.get_locale())
-    backend = Keyword.get(options, :backend, Cldr.default_backend())
+    backend = Keyword.get_lazy(options, :backend, &Cldr.default_backend/0)
+    locale = Keyword.get(options, :locale, backend.get_locale())
 
     with {:ok, locale} <- Cldr.validate_locale(locale, backend),
          territory = Keyword.get(options, :territory, locale.territory),
@@ -1219,17 +1287,44 @@ defmodule Cldr.Calendar do
     end
   end
 
-  @doc false
-  def first_day_for_locale(%LanguageTag{territory: territory}) do
-    with {:ok, territory} <- Cldr.validate_territory(territory) do
-      first_day_for_locale(territory)
+  @doc """
+  Returns the first day of a week for a given
+  locale.
+
+  Note that the first of the first week is commonly
+  not aligned with the first day of the year.
+
+  """
+  def first_day_for_locale(%LanguageTag{} = locale) do
+    locale
+    |> Cldr.Locale.territory_from_locale()
+    |> first_day_for_territory
+  end
+
+  def first_day_for_locale(locale, options \\ []) when is_binary(locale) do
+    backend = Keyword.get_lazy(options, :backend, &Cldr.default_backend/0)
+
+    with {:ok, locale} <- Cldr.validate_locale(locale, backend) do
+      first_day_for_locale(locale)
     end
   end
 
-  @doc false
-  def min_days_for_locale(%LanguageTag{territory: territory}) do
-    with {:ok, territory} <- Cldr.validate_territory(territory) do
-      min_days_for_locale(territory)
+  @doc """
+  Returns the minimum days in the first week of a year
+  for a given locale.
+
+  """
+  def min_days_for_locale(%LanguageTag{} = locale) do
+    locale
+    |> Cldr.Locale.territory_from_locale()
+    |> min_days_for_territory
+  end
+
+  def min_days_for_locale(locale, options \\ []) when is_binary(locale) do
+    backend = Keyword.get_lazy(options, :backend, &Cldr.default_backend/0)
+
+    with {:ok, locale} <- Cldr.validate_locale(locale, backend) do
+      min_days_for_locale(locale)
     end
   end
 
@@ -1259,7 +1354,7 @@ defmodule Cldr.Calendar do
       [5, 6]
 
       iex> Cldr.Calendar.weekend("xx")
-      {:error, {Cldr.UnknownTerritoryError, "The territory \\"xx\\" is unknown"}}
+      {:error, {Cldr.UnknownTerritoryError, "The territory :XX is unknown"}}
 
   """
   def weekend(territory)
@@ -1295,12 +1390,12 @@ defmodule Cldr.Calendar do
       [1, 2, 3, 4, 7]
 
       iex> Cldr.Calendar.weekdays("xx")
-      {:error, {Cldr.UnknownTerritoryError, "The territory \\"xx\\" is unknown"}}
+      {:error, {Cldr.UnknownTerritoryError, "The territory :XX is unknown"}}
 
   """
   def weekdays(territory)
 
-  @week_info Cldr.Config.week_info()
+  @week_info Cldr.Config.weeks()
 
   for territory <- Cldr.known_territories() do
     starts =
@@ -1319,11 +1414,11 @@ defmodule Cldr.Calendar do
       get_in(@week_info, [:min_days, territory]) ||
         get_in(@week_info, [:min_days, @the_world])
 
-    def first_day_for_locale(unquote(territory)) do
+    def first_day_for_territory(unquote(territory)) do
       unquote(first_day)
     end
 
-    def min_days_for_locale(unquote(territory)) do
+    def min_days_for_territory(unquote(territory)) do
       unquote(min_days)
     end
 
@@ -1336,15 +1431,15 @@ defmodule Cldr.Calendar do
     end
   end
 
-  def first_day_for_locale(territory) do
+  def first_day_for_territory(territory) do
     with {:ok, territory} <- Cldr.validate_territory(territory) do
-      first_day_for_locale(territory)
+      first_day_for_territory(territory)
     end
   end
 
-  def min_days_for_locale(territory) do
+  def min_days_for_territory(territory) do
     with {:ok, territory} <- Cldr.validate_territory(territory) do
-      min_days_for_locale(territory)
+      min_days_for_territory(territory)
     end
   end
 
@@ -1384,6 +1479,7 @@ defmodule Cldr.Calendar do
 
       iex> Cldr.Calendar.date_to_string ~D[2019-12-04]
       "2019-12-04"
+
       iex> Cldr.Calendar.date_to_string ~D[2019-23-04 Cldr.Calendar.NRF]
       "2019-W23-4"
 
@@ -1519,10 +1615,13 @@ defmodule Cldr.Calendar do
 
       iex> Cldr.Calendar.next ~D[2019-01-01], :day
       ~D[2019-01-02]
+
       iex> Cldr.Calendar.next ~D[2019-01-01], :month
       ~D[2019-02-01]
+
       iex> Cldr.Calendar.next ~D[2019-01-01], :quarter
       ~D[2019-04-01]
+
       iex> Cldr.Calendar.next ~D[2019-01-01], :year
       ~D[2020-01-01]
 
@@ -1600,10 +1699,13 @@ defmodule Cldr.Calendar do
 
       iex> Cldr.Calendar.previous ~D[2019-01-01], :day
       ~D[2018-12-31]
+
       iex> Cldr.Calendar.previous ~D[2019-01-01], :quarter
       ~D[2018-10-01]
+
       iex> Cldr.Calendar.previous ~D[2019-01-01], :month
       ~D[2018-12-01]
+
       iex> Cldr.Calendar.previous ~D[2019-01-01], :year
       ~D[2018-01-01]
 
@@ -1665,7 +1767,7 @@ defmodule Cldr.Calendar do
   * `part` is one of `:era`, `:quarter`, `:month`,
     `:day_of_week` or `:days_of_week`
 
-  * `options` is a keyword list of options
+  * `options` is a Keyword list of options
 
   ## Options
 
@@ -1735,23 +1837,26 @@ defmodule Cldr.Calendar do
   end
 
   def localize(date, part, options) do
-    cldr_backend = backend_from_calendar(date.calendar)
-    backend = Keyword.get(options, :backend, cldr_backend || Cldr.default_backend())
-    locale = Keyword.get(options, :locale, Cldr.get_locale())
+    backend =
+      Keyword.get_lazy(options, :backend, fn ->
+        backend_from_calendar(date.calendar) || Cldr.default_backend()
+      end)
+
+    locale = Keyword.get(options, :locale, backend.get_locale())
     type = Keyword.get(options, :type, :format)
     format = Keyword.get(options, :format, :abbreviated)
 
-    with {:ok, locale} <- Cldr.validate_locale(locale),
+    with {:ok, backend} <- validate_backend(backend),
+         {:ok, locale} <- backend.validate_locale(locale),
          {:ok, part} <- validate_part(part),
          {:ok, type} <- validate_type(type),
-         {:ok, format} <- validate_format(format),
-         {:ok, backend} <- validate_backend(backend) do
+         {:ok, format} <- validate_format(format) do
       localize(date, part, type, format, backend, locale)
     end
   end
 
   defp backend_from_calendar(calendar) do
-    if function_exported?(calendar, :__config__, 0) do
+    if Code.ensure_loaded?(calendar) && function_exported?(calendar, :__config__, 0) do
       calendar.__config__().cldr_backend
     else
       nil
@@ -1889,6 +1994,73 @@ defmodule Cldr.Calendar do
     {:ok, backend}
   end
 
+  @spec plus(integer, integer()) :: integer()
+  @doc false
+
+  def plus(value, increment) when is_integer(value) and is_integer(increment) do
+    value + increment
+  end
+
+  @doc """
+  Adds a duration to a date
+
+  ## Arguments
+
+  * `date` is any map that conforms to
+    `Calendar.date()`
+
+  * `duration` is any duration returned
+    by `Cldr.Calendar.Duration.new!/2`
+
+  * `options` is a Keyword list of
+    options
+
+  ## Options
+
+  * Options are those applicatable to
+    `Cldr.Calendar.plus/4`
+
+  ## Returns
+
+  * A `date` advanced by the duration
+
+  ## Examples
+
+      iex> Cldr.Calendar.plus ~D[2020-01-01],
+      ...> Cldr.Calendar.Duration.new!(~D[2020-01-01], ~D[2020-02-01])
+      ~D[2020-02-01]
+
+      iex> Cldr.Calendar.plus ~D[2020-01-01],
+      ...> Cldr.Calendar.Duration.new!(~D[2020-01-01], ~D[2020-01-02])
+      ~D[2020-01-02]
+
+      iex> Cldr.Calendar.plus ~D[2020-01-01],
+      ...> Cldr.Calendar.Duration.new!(~D[2020-01-01], ~D[2020-02-01])
+      ~D[2020-02-01]
+
+      iex> Cldr.Calendar.plus ~D[2020-01-01],
+      ...> Cldr.Calendar.Duration.new!(~D[2020-01-01], ~D[2021-02-01])
+      ~D[2021-02-01]
+
+  """
+
+  @spec plus(Calendar.date(), Cldr.Calendar.Duration.t()) ::
+          Calendar.date()
+
+  def plus(date, %Cldr.Calendar.Duration{} = duration) do
+    plus(date, duration, [])
+  end
+
+  # @spec plus(Calendar.date(), Cldr.Calendar.Duration.t(), Keyword.t()) ::
+  #   Calendar.date()
+
+  def plus(date, %Cldr.Calendar.Duration{} = duration, options) do
+    date
+    |> plus(:days, duration.day, options)
+    |> plus(:months, duration.month, options)
+    |> plus(:years, duration.year, options)
+  end
+
   @doc """
   Increments a date or date range by an
   integer amount of a date period (year,
@@ -1902,7 +2074,7 @@ defmodule Cldr.Calendar do
   * `period` is `:year`, `:quarter`, `:month`,
     `:week` or `:day`
 
-  * `options` is a Kwyrod list of options
+  * `options` is a Keyword list of options
 
   ## Options
 
@@ -1923,26 +2095,29 @@ defmodule Cldr.Calendar do
 
       iex> Cldr.Calendar.plus ~D[2016-02-29], :days, 1
       ~D[2016-03-01]
+
       iex> Cldr.Calendar.plus ~D[2019-03-01], :months, 1
       ~D[2019-04-01]
+
       iex> Cldr.Calendar.plus ~D[2016-02-29], :days, 1
       ~D[2016-03-01]
+
       iex> Cldr.Calendar.plus ~D[2019-02-28], :days, 1
       ~D[2019-03-01]
+
       iex> Cldr.Calendar.plus ~D[2019-03-01], :months, 1
       ~D[2019-04-01]
+
       iex> Cldr.Calendar.plus ~D[2019-03-01], :quarters, 1
       ~D[2019-06-01]
+
       iex> Cldr.Calendar.plus ~D[2019-03-01], :years, 1
       ~D[2020-03-01]
 
   """
-  def plus(value, increment) when is_integer(value) and is_integer(increment) do
-    value + increment
-  end
 
-  @spec plus(Date.t(), atom(), integer(), Keyword.t()) :: Date.t()
-  @spec plus(Date.Range.t(), atom(), integer(), Keyword.t()) :: Date.Range.t()
+  @spec plus(Calendar.date() | Date.Range.t(), atom(), integer(), Keyword.t()) ::
+          Calendar.date()
 
   def plus(date, period, increment, options \\ [])
 
@@ -2055,7 +2230,7 @@ defmodule Cldr.Calendar do
   * `period` is `:year`, `:quarter`, `:month`,
     `:week` or `:day`
 
-  * `options` is a Kwyrod list of options
+  * `options` is a Keyword list of options
 
   ## Options
 
@@ -2076,16 +2251,22 @@ defmodule Cldr.Calendar do
 
       iex> Cldr.Calendar.minus ~D[2016-03-01], :days, 1
       ~D[2016-02-29]
+
       iex> Cldr.Calendar.minus ~D[2019-03-01], :months, 1
       ~D[2019-02-01]
+
       iex> Cldr.Calendar.minus ~D[2016-03-01], :days, 1
       ~D[2016-02-29]
+
       iex> Cldr.Calendar.minus ~D[2019-03-01], :days, 1
       ~D[2019-02-28]
+
       iex> Cldr.Calendar.minus ~D[2019-03-01], :months, 1
       ~D[2019-02-01]
+
       iex> Cldr.Calendar.minus ~D[2019-03-01], :quarters, 1
       ~D[2018-12-01]
+
       iex> Cldr.Calendar.minus ~D[2019-03-01], :years, 1
       ~D[2018-03-01]
 
@@ -2423,9 +2604,52 @@ defmodule Cldr.Calendar do
     Integer.mod(iso_day_number + 5, 7) + 1
   end
 
+  @doc """
+  Validates if the argument is a Cldr.Calendar
+  calendar module.
+
+  ## Arguments
+
+  * `calendar_module` is a module that implements the
+    `Cldr.Calendar` behaviour
+
+  ## Returns
+
+  * `{:ok, calendar_module}` or
+
+  * `{:error, {exception, reason}}`
+
+  ## Examples
+
+      iex> Cldr.Calendar.validate_calendar Cldr.Calendar.Gregorian
+      {:ok, Cldr.Calendar.Gregorian}
+
+      iex> Cldr.Calendar.validate_calendar :not_a_calendar
+      {:error,
+       {Cldr.InvalidCalendarModule, ":not_a_calendar is not a calendar module."}}
+
+  """
+  def validate_calendar(calendar_module) when is_atom(calendar_module) do
+    if Code.ensure_loaded?(calendar_module) &&
+         function_exported?(calendar_module, :cldr_calendar_type, 0) do
+      {:ok, calendar_module}
+    else
+      {:error, invalid_calendar_error(calendar_module)}
+    end
+  end
+
+  def validate_calendar(other) do
+    {:error, invalid_calendar_error(other)}
+  end
+
   #
   # Helpers
   #
+
+  @doc false
+  def invalid_calendar_error(calendar_module) do
+    {Cldr.InvalidCalendarModule, "#{inspect(calendar_module)} is not a calendar module."}
+  end
 
   ## January starts end the same year, December ends starts the same year
   @doc false
@@ -2556,4 +2780,67 @@ defmodule Cldr.Calendar do
   defdelegate day_of_week(date), to: Date
   defdelegate days_in_month(date), to: Date
   defdelegate months_in_year(date), to: Date
+
+  # Functions that aid in pattern matching
+  # in function heads
+
+  @doc false
+  def datetime do
+    quote do
+      %{
+        year: _,
+        month: _,
+        day: _,
+        hour: _,
+        minute: _,
+        second: _,
+        microsecond: _,
+        time_zone: _,
+        zone_abbr: _,
+        utc_offset: _,
+        std_offset: _,
+        calendar: var!(calendar)
+      }
+    end
+  end
+
+  @doc false
+  def naivedatetime do
+    quote do
+      %{
+        year: _,
+        month: _,
+        day: _,
+        hour: _,
+        minute: _,
+        second: _,
+        microsecond: _,
+        calendar: var!(calendar)
+      }
+    end
+  end
+
+  @doc false
+  def date do
+    quote do
+      %{
+        year: _,
+        month: _,
+        day: _,
+        calendar: var!(calendar)
+      }
+    end
+  end
+
+  @doc false
+  def time do
+    quote do
+      %{
+        hour: _,
+        minute: _,
+        second: _,
+        microsecond: _
+      }
+    end
+  end
 end

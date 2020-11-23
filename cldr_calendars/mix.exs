@@ -1,7 +1,7 @@
 defmodule Cldr.Calendar.MixProject do
   use Mix.Project
 
-  @version "1.5.1"
+  @version "1.9.0"
 
   def project do
     [
@@ -24,7 +24,8 @@ defmodule Cldr.Calendar.MixProject do
       dialyzer: [
         ignore_warnings: ".dialyzer_ignore_warnings",
         plt_add_apps:
-          ~w(inets jason mix ex_cldr_currencies ex_cldr_units ex_cldr_lists ex_cldr_numbers)a
+          ~w(inets jason mix ex_cldr_currencies ex_cldr_units ex_cldr_lists
+             ex_cldr_numbers ratio calendar_interval)a
       ],
       compilers: Mix.compilers()
     ]
@@ -62,12 +63,14 @@ defmodule Cldr.Calendar.MixProject do
 
   defp deps do
     [
-      {:ex_cldr, "~> 2.8"},
-      {:ex_cldr_units, "~> 2.0", optional: true},
-      {:ex_cldr_lists, "~> 2.4", optional: true},
+      {:ex_cldr_numbers, "~> 2.13"},
+      {:ex_cldr_units, "~> 3.0", optional: true},
+      {:tz, "~> 0.9", optional: true, only: [:dev, :test]},
+      {:calendar_interval, "~> 0.2", optional: true},
       {:jason, "~> 1.0"},
-      {:ex_doc, "~> 0.18", only: [:release, :dev]},
-      {:benchee, "~> 0.14", optional: true, only: [:dev, :test]},
+      {:ex_doc, "~> 0.21", only: [:release, :dev]},
+      {:earmark, "~> 1.0"},
+      {:benchee, "~> 1.0", optional: true, only: [:dev, :test]},
       {:dialyxir, "~> 1.0.0-rc", only: [:dev], runtime: false},
       {:nimble_strftime, "~> 0.1", only: :test},
       {:stream_data, "~> 0.4", only: :test}
@@ -93,7 +96,7 @@ defmodule Cldr.Calendar.MixProject do
         "LICENSE.md",
         "CHANGELOG.md"
       ],
-      skip_undefined_reference_warnings_on: ["changelog"]
+      skip_undefined_reference_warnings_on: ["changelog", "CHANGELOG.md"]
     ]
   end
 

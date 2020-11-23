@@ -21,6 +21,7 @@ erl_crash.dump
 
 # asdf
 .tool-versions
+<<<<<<< HEAD
 
 # Don't commit .so
 /priv/*.so
@@ -28,3 +29,5 @@ erl_crash.dump
 # tar files
 *.tar
 
+=======
+>>>>>>> 7857535168c57cc13846041ce09a217c9afa4f4b

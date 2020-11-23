@@ -21,13 +21,28 @@ Calendars are curious things. For centuries people from all cultures have sought
 
 * Provides convenient `Date.Range` calculators for years, quarters, months and weeks for calendars and provides the means to move to the `next` and `previous` period in a calendar where a period may be a year, quarter, month, week or day.
 
-* Supports adding or substracting periods to dates and date ranges. See `Calendar.plus/3` and `Calendar.minus/3`
+* Supports adding or substracting periods to dates and date ranges. See `Cldr.Calendar.plus/3` and `Cldr.Calendar.minus/3`
 
 * Includes pre-defined calendars for Gregorian (compatible with the builtin `Calendar` module), `ISOWeek` and `National Retail Federation (NRF)` calendars
+
+* Includes returning a calendar configured to reflect the `first_day_of_week` and `min_days_in_first_week` for a given territory lor locale.  See `Cldr.Calendar.calendar_for_locale/2`.
 
 * Includes functions to find the first, last, nearest and `nth` days of the week from a date. For example, find the `2nd Tuesday in November`.
 
 **See the documentation for `Cldr.Calendar` for the main public API.**
+
+## Cldr Calendars Installation
+
+Add `ex_cldr_calendars` to your `deps` in `mix.exs`.
+
+```elixir
+def deps do
+  [
+    {:ex_cldr_calendars, "~> 1.7"}
+    ...
+  ]
+end
+```
 
 ## Getting Started
 
@@ -252,7 +267,7 @@ day_of_year/3
 
 ### Fiscal Calendars for Territories
 
-`Cldr Calendars` can create a fiscal year calendar for many territories (countries) based upon data from [the CIA world fact book](https://www.cia.gov/library/publications/the-world-factbook/fields/228.html).  To create a fiscal year calendar for a territory use the `Cldr.Calendar.FiscalYear/1` function.
+`Cldr Calendars` can create a fiscal year calendar for many territories (countries) based upon data from [the CIA world fact book](https://www.cia.gov/library/publications/the-world-factbook/fields/228.html).  To create a fiscal year calendar for a territory use the `Cldr.Calendar.FiscalYear.calendar_for/1` function.
 
 ```
  iex> Cldr.Calendar.FiscalYear.calendar_for("IS")
@@ -403,18 +418,57 @@ defmodule MyApp.Cldr do
 end
 ```
 
-To create a duration, use `Cldr.Calendar.Duration.new/2` providing two dates, times or datetimes. The first date must occur before the second date.  To format a duration into a string use `Cldr.Calendar.Duration.to_string/2`.
+To create a duration, use `Cldr.Calendar.Duration.new/2` providing two dates, times or datetimes. The first date must occur before the second date.  Datetimes must be in the same time zone. To format a duration into a string use `Cldr.Calendar.Duration.to_string/2`.
 
 An example is:
 ```elixir
-iex> {:ok, duration} = Duration.new(~D[2019-01-01], ~D[2019-12-31])
+iex> {:ok, duration} = Cldr.Calendar.Duration.new(~D[2019-01-01], ~D[2019-12-31])
 iex> Cldr.Calendar.Duration.to_string(duration)
 "11 months and 30 days"
 ```
 
+A duration can also be created from a `Date.Range.t` and `CalendarInterval.t`. `CalendarInterval.t` is defined by the wonderful [calendar_interval](https://hex.pm/packages/calendar_interval) library.
+
+```elixir
+iex> Cldr.Calendar.Duration.new Date.range(~D[2020-01-01], ~D[2020-12-31])
+{:ok,
+ %Cldr.Calendar.Duration{
+   day: 30,
+   hour: 0,
+   microsecond: 0,
+   minute: 0,
+   month: 11,
+   second: 0,
+   year: 0
+ }}
+
+iex> use CalendarInterval
+CalendarInterval
+
+iex> Cldr.Calendar.Duration.new ~I"2020-01/12"
+{:ok,
+ %Cldr.Calendar.Duration{
+   day: 30,
+   hour: 0,
+   microsecond: 0,
+   minute: 0,
+   month: 11,
+   second: 0,
+   year: 0
+ }}
+```
+
+A duration can be added to a date. Adding to times and datetimes is not currenlty supported. An example is:
+
+```elixir
+iex> {:ok, duration} = Cldr.Calendar.Duration.new(~D[2019-01-01], ~D[2019-12-31])
+iex> Cldr.Calendar.plus ~D[2019-01-01], duration
+~D[2019-12-31]
+```
+
 ### Configuring a Cldr backend for localization
 
-In order to localize date parts a`backend` module must be defined. This
+In order to localize date parts a `backend` module must be defined. This
 is a module which hosts the CLDR data for a set of locales. The detailed
 information for configuring a `backend` is [documented here](https://hexdocs.pm/ex_cldr/readme.html#configuration).
 
@@ -448,7 +502,7 @@ It is also possible to pass the name of a backend module to the `Cldr.Calendar.l
 
 ## Inspecting calendar dates
 
-The examples in this readme reflect inspecting dates as they will be in Elixir 1.10. Until that time if you wish to inspect dates in the same manner, add this code to your project:
+The examples in this readme reflect inspecting dates as they are in Elixir 1.10. For earlier releases of Elixir add this code to your project:
 
 ```elixir
 if Version.compare(System.version(), "1.10.0-dev") == :lt do
@@ -461,18 +515,6 @@ end
 ```
 You will get a warning indicating that the existing implementation is being overwritten. This is expected.
 
-## Cldr Calendars Installation
-
-Add `ex_cldr_calendars` to your `deps` in `mix.exs`.
-
-```elixir
-def deps do
-  [
-    {:ex_cldr_calendars, "~> 2.6"}
-    ...
-  ]
-end
-```
 
 
 

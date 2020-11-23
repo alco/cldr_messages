@@ -11,7 +11,7 @@ defmodule Cldr_Messages_Test do
   end
 
   test "formatting a unit" do
-    assert Cldr.Message.format("I am {height} tall", height: Cldr.Unit.new!(1.8, :meter)) ==
+    assert Cldr.Message.format("I am {height} tall", height: Cldr.Unit.new(1.8, :meter)) ==
              {:ok, "I am 1.8 meters tall"}
   end
 
@@ -166,35 +166,6 @@ defmodule Cldr_Messages_Test do
              {:error,
               {Cldr.Message.ParseError,
                "'plural', 'select' and 'selectordinal' arguments must have an 'other' clause. Found %{0 => [literal: \"it's zero\"]}"}}
-  end
-
-  test "canonical message formatting" do
-    message1 =
-      "It's my cat's {year, selectordinal, one {#st} two {#nd} few {#rd} other {#th}} birthday!"
-
-    message2 = "It's my cat's {year, selectordinal,
-        one {#st}
-        two {#nd}
-        few {#rd}
-        other {#th}
-    } birthday!"
-
-    assert Cldr.Message.canonical_message(message1) == Cldr.Message.canonical_message(message2)
-  end
-
-  test "jaro distance" do
-    message1 =
-      "It's my cat's {year, selectordinal, one {#st} two {#nd} few {#rd} other {#th}} birthday!"
-
-    message2 = "It's my cat's {year, selectordinal,
-        one {#st}
-        two {#nd}
-        few {#rd}
-        other {#th}
-    } birthday!"
-
-    assert Cldr.Message.jaro_distance(message1, message2) == {:ok, 1.0}
-    assert Cldr.Message.jaro_distance!(message1, message2) == 1.0
   end
 
   test "the format macro" do
